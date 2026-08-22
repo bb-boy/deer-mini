@@ -1,4 +1,4 @@
-"""Create a non-overwriting pytest skeleton for an app module."""
+"""Create a non-overwriting pytest skeleton for any project Python file."""
 
 from __future__ import annotations
 
@@ -7,26 +7,35 @@ from pathlib import Path
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-APP_DIR = BACKEND_DIR / "app"
+PROJECT_DIR = BACKEND_DIR.parent
 TESTS_DIR = BACKEND_DIR / "tests"
+IGNORED_DIRECTORIES = frozenset({".git", ".venv", "__pycache__", "tests"})
 
 
-def build_test_path(source_path: Path) -> tuple[Path, str]:
-    """Map app/domain/messages.py to tests/domain/test_messages.py."""
+def build_test_path(source_path: Path) -> tuple[Path, Path]:
+    """Map a project source path to its mirrored path below backend/tests."""
     if source_path.suffix != ".py":
         raise ValueError("只能为 .py 文件创建测试骨架")
 
-    relative_path = source_path.resolve().relative_to(APP_DIR)
-    module_name = "app." + ".".join(relative_path.with_suffix("").parts)
-    test_path = TESTS_DIR / relative_path.parent / f"test_{relative_path.stem}.py"
-    return test_path, module_name
+    relative_path = source_path.resolve().relative_to(PROJECT_DIR)
+    if any(part in IGNORED_DIRECTORIES for part in relative_path.parts):
+        raise ValueError("不能为测试、虚拟环境、缓存或 Git 目录中的文件创建测试骨架")
+
+    if relative_path.parts[0] == "backend":
+        test_relative_path = Path(*relative_path.parts[1:])
+    else:
+        test_relative_path = Path("project") / relative_path
+
+    test_path = (
+        TESTS_DIR
+        / test_relative_path.parent
+        / f"test_{test_relative_path.stem}.py"
+    )
+    return test_path, relative_path
 
 
-def render_skeleton(module_name: str, source_path: Path) -> str:
-    return f'''"""Tests for {module_name}.
-
-Source: {source_path}
-"""
+def render_skeleton(source_path: Path) -> str:
+    return f'''"""Tests for {source_path}."""
 
 # 在这里编写 pytest 的 test_* 函数。
 '''
@@ -34,7 +43,7 @@ Source: {source_path}
 
 def main(arguments: list[str]) -> int:
     if len(arguments) != 2:
-        print("用法: python3 scripts/new_test.py app/模块路径.py", file=sys.stderr)
+        print("用法: python3 scripts/new_test.py <项目中的 .py 文件>", file=sys.stderr)
         return 1
 
     source_path = Path(arguments[1]).resolve()
@@ -43,7 +52,7 @@ def main(arguments: list[str]) -> int:
         return 1
 
     try:
-        test_path, module_name = build_test_path(source_path)
+        test_path, relative_path = build_test_path(source_path)
     except ValueError as error:
         print(f"无法创建测试骨架: {error}", file=sys.stderr)
         return 1
@@ -53,7 +62,7 @@ def main(arguments: list[str]) -> int:
         return 1
 
     test_path.parent.mkdir(parents=True, exist_ok=True)
-    test_path.write_text(render_skeleton(module_name, source_path), encoding="utf-8")
+    test_path.write_text(render_skeleton(relative_path), encoding="utf-8")
     print(f"已创建测试骨架: {test_path}")
     return 0
 

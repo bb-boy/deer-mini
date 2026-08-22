@@ -1,6 +1,13 @@
 {
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
   "python.analysis.extraPaths": [
     "${workspaceFolder}/backend"
+  ],
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.cwd": "${workspaceFolder}/backend",
+  "python.testing.pytestArgs": [
+    "tests"
   ],
   "VsCodeTaskButtons.showCounter": false,
   "VsCodeTaskButtons.tasks": [

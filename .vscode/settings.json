@@ -8,6 +8,11 @@
       "label": "$(beaker) New test",
       "task": "Create pytest skeleton for active file",
       "tooltip": "为当前 Python 文件创建 pytest 测试骨架"
+    },
+    {
+      "label": "$(run-all) Run tests",
+      "task": "Run Python tests",
+      "tooltip": "运行 deer_mini 的全部 pytest 测试"
     }
   ]
 }

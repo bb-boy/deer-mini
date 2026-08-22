@@ -13,6 +13,21 @@
         "cwd": "${workspaceFolder}/backend"
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Run Python tests",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "-m",
+        "pytest",
+        "tests",
+        "-v"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": []
     }
   ]
 }

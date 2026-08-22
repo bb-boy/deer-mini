@@ -1,0 +1,18 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Create pytest skeleton for active file",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/backend/scripts/new_test.py",
+        "${file}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/backend"
+  ],
+  "VsCodeTaskButtons.showCounter": false,
+  "VsCodeTaskButtons.tasks": [
+    {
+      "label": "$(beaker) New test",
+      "task": "Create pytest skeleton for active file",
+      "tooltip": "为当前 Python 文件创建 pytest 测试骨架"
+    }
+  ]
+}

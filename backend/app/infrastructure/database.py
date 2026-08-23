@@ -90,10 +90,12 @@ def initialize_database() -> None:
 
 
             CREATE INDEX IF NOT EXISTS idx_runs_thread_id ON runs(thread_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_runs_thread_active
+            ON runs(thread_id)
+            WHERE status IN ('pending', 'running');
             CREATE INDEX IF NOT EXISTS idx_checkpoints_thread_id ON checkpoints(thread_id);
             CREATE INDEX IF NOT EXISTS idx_checkpoints_run_id ON checkpoints(run_id);
             CREATE INDEX IF NOT EXISTS idx_run_events_thread_id ON run_events(thread_id);
             """
         )
 
-    

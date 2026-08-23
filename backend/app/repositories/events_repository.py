@@ -83,6 +83,15 @@ class EventRepository:
          thread_id: str,
             run_id: str,
          user_id: str, ) -> list[RunEvent]:
+
+        """
+        从数据库中读取某个run的所有事件，并按sequence升序排列
+        :param thread_id: 线程ID
+        :param run_id: 运行ID
+        :param user_id: 用户ID
+        :return: RunEvent对象列表
+
+        """
          
         with connect() as conn:
             rows = conn.execute(

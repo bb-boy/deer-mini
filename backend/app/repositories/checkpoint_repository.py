@@ -99,7 +99,7 @@ class CheckpointRepository:
     def history(self, thread_id: str, user_id: str,run_id: str) -> list[Checkpoint]:
 
         """
-        cong sqlite 数据库中获取一个 Thread 对象的一次run的所有 Checkpoint 对象  
+        从数据库中获取一个 Thread 对象的一次run的所有 Checkpoint 对象  
         """
 
         with connect() as conn:

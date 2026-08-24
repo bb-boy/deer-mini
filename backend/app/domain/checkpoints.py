@@ -34,6 +34,8 @@ from app.domain.common import utc_now
 from app.domain.threads import ThreadState
 
 
+
+#checkpoint对象表示某次run的某个步骤的存档，包含了当时完整的ThreadState
 @dataclass   #@dataclass 中，必填字段永远放在可选字段前面，
 class Checkpoint:
     

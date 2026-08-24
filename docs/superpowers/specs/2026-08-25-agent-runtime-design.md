@@ -16,9 +16,11 @@
 - 读取最新 Checkpoint；没有 Checkpoint 时从 Thread 的工作目录创建空 `ThreadState`。
 - 将用户消息加入状态并保存 Checkpoint。
 - 将 Run 标记为 `running`，并记录 `run.start`。
+- 向 StreamBridge 发布 `metadata`，其中包含 `run_id` 和 `thread_id`。
 - 调用 Agent，保存 Agent 返回的 `ThreadState`。
 - 成功时记录 `run.end` 并将 Run 标记为 `success`。
 - 捕获异常时记录 `run.error` 并将 Run 标记为 `error`，然后重新抛出异常给 API 层。
+- 无论成功还是失败，最后调用 `publish_end(run_id)`，使所有 SSE 订阅者结束等待。
 
 ### Agent
 
@@ -36,6 +38,21 @@ Agent 不依赖 DeepSeek、LangGraph 或 SQLite。它接收当前 `ThreadState` 
 
 Agent 不直接访问 Repository，避免推理逻辑、数据库和流传输耦合。
 
+## Checkpoint 步号
+
+`step` 是一个 Run 内递增的关键状态编号，由 Runtime 统一分配。每次保存时读取该 Run 已有的最大步号再加一；Agent 不自行猜测编号。
+
+典型的一次 Run：
+
+```text
+step=1：用户消息加入 ThreadState
+step=2：LLM 消息加入 ThreadState
+step=3：工具结果加入 ThreadState
+step=4：最终回答加入 ThreadState
+```
+
+这样历史状态可按步骤还原；未来浏览器断线或用户查看一次 Run 的执行过程时，不会只看到最终答案。
+
 ## 数据流
 
 ```text
@@ -43,9 +60,11 @@ Agent 不直接访问 Repository，避免推理逻辑、数据库和流传输耦
 → AgentRuntime 恢复状态
 → 保存用户消息 Checkpoint
 → Run running + run.start
+→ Bridge metadata
 → Agent.run(state, context)
 → 保存最终/关键状态
 → run.end + Run success
+→ publish_end
 ```
 
 发生异常时：
@@ -54,6 +73,7 @@ Agent 不直接访问 Repository，避免推理逻辑、数据库和流传输耦
 Agent 异常
 → run.error
 → Run error
+→ publish_end
 → API 层接收异常
 ```
 

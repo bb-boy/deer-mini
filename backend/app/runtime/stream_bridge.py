@@ -11,8 +11,9 @@ from collections.abc import AsyncIterator
 @dataclass(frozen=True) #创建后不能更改
 class StreamEvent:
     id: str #这次 Run 中第几条实时事件，例如 1、2、3
-    event:str #事件名称，例如 "run_event"
-    data: dict[str, Any] #具体内容，例如：{"event_type": "tool.start", "tool_name": "read_file"}
+    event:str #事件分类，例如 "run_event"
+    data: dict[str, Any] #具体内容，例如：{ "tool_name": "read_file"}，这里就是RunEvent对象的to_dict()方法返回的字典
+
   
 
 
@@ -20,9 +21,9 @@ class StreamEvent:
 @dataclass
 class _RunStream:
     events: List[StreamEvent] = field(default_factory=list) #每次创建一个实例，都默认生成一个新的list
-    condition: asyncio.Condition = field(default_factory=asyncio.Condition)
+    condition: asyncio.Condition = field(default_factory=asyncio.Condition) #锁
     ended: bool = False
-    next_id: int = 1
+    next_id: int = 1 #下一个事件的ID
 
 
 
@@ -58,19 +59,27 @@ class MemoryStreamBridge:
     async def publish(
         self,
         run_id: str,
-        event: str,
-        data: dict[str, Any],
+        event: str,  #传输层的事件分类，例如具体的run_event
+        data: dict[str, Any], #具体的事件，data = {
+   #             "id": "事件编号",
+    #            "run_id": "本次运行编号",
+      #          "event_type": "tool.start",
+          #      "payload": {"tool_name": "read_file"},
+            #    "sequence": 3,
+#}
         ) -> None:
 
-        #获取或者创建一个 RunStream
+        #根据run_id获取或者创建一个 RunStream
         stream = self._get_or_create_stream(run_id)
 
-        #等待通知
+        #等待通知，获得锁，
         async with stream.condition:
+
+            #创建一个流事件对象，id从“1”开始，event是传输层的事件分类，data是具体的事件 
             stream_event = StreamEvent(
-                id=str(stream.next_id),
-                event=event,
-                data=data,
+                id=str(stream.next_id),#id从“1”开始
+                event=event, #事件分类
+                data=data, #具体事件
             )
 
             #事件追加到 RunStream 中
@@ -107,11 +116,13 @@ class MemoryStreamBridge:
         #获取或者创建一个 RunStream
         stream = self._get_or_create_stream(run_id)
 
-        #下一个事件的索引
+        #下一个事件的索引，没有事件就是0
         next_index = self._resolve_start_index(run_id, last_event_id)
         
 
         while True:
+
+            #获取RunStream的锁，保证在等待通知和处理事件时不会被其他协程修改
             async with stream.condition:
                 time_out = False
                 #如果下一个事件的索引大于等于当前事件列表的长度，说明没有新的事件产生，需要等待通知 

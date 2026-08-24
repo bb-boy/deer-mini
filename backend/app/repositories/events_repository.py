@@ -68,7 +68,7 @@ class EventRepository:
                     event.run_id,
                     event.thread_id,
                     event.event_type,
-                    json.dumps(event.payload, ensure_ascii=False),
+                    json.dumps(event.payload, ensure_ascii=False), 
                     next_sequence,
                     event.created_at,
                 ),

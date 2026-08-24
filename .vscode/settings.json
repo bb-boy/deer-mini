@@ -22,5 +22,12 @@
       "task": "Run Python tests",
       "tooltip": "运行 deer_mini 的全部 pytest 测试"
     }
+  ],
+  "python-envs.pythonProjects": [
+    {
+      "path": ".",
+      "envManager": "ms-python.python:venv",
+      "packageManager": "ms-python.python:pip"
+    }
   ]
 }

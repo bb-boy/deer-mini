@@ -34,7 +34,7 @@ class CheckpointRepository:
         """
         将一个Checkpoint对象存储到sqlite数据库中
         :param checkpoint: Checkpoint对象
-        :return: None
+        :return: Checkpoint对象
         """
 
         if checkpoint.thread_id != checkpoint.state.thread_id:

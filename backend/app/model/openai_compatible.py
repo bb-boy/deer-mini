@@ -29,6 +29,7 @@ from openai import AsyncOpenAI
 from app.domain.tools import ToolDefinition
 from app.model.base import TextDeltaHandler
 from dataclasses import dataclass, field
+from app.model.config import get_model_profile,ModelProfile
 
 
 
@@ -56,18 +57,20 @@ class OpenAICompatibleModel:
         self,
         api_key: str,
         base_url: str,
-        model_name: str
-        ) ->None:
+        profile: ModelProfile
+    ) -> None:
 
         if not api_key:
             raise ValueError("API key is required")
         if not base_url:
             raise ValueError("Base URL is required")
-        if not model_name:
-            raise ValueError("Model name is required")
+        if not profile:
+            raise ValueError("Model profile is required")
 
 
-        self._model_name= model_name
+        self._profile = profile
+
+        self._model_name= profile.model_id
 
 
 
@@ -210,11 +213,25 @@ class OpenAICompatibleModel:
 
         """
 
-        #把Message对象转化为OpenAI兼容的字典
-        api_messages = [self._message_to_api(message) for message in messages]
+        #判断模型是否要回传思考内容，不要求回传就不回传，要求就回传，把message转为OpenAI兼容的字典
+        api_messages: list[dict[str, Any]] = []
 
-        #把ToolDefinition对象转化为OpenAI兼容的字典
-        api_tools = [self._tool_to_api(tool) for tool in tools]
+        #遍历消息列表，message是Mesasge对象
+        for message in messages:
+
+            #类对象转为OpenAI兼容的字典
+            message_dict = self._message_to_api(message)
+
+            #如果调用的模型不要求回传思考内容，就把reasoning_content字段删除
+            if not self._profile.replay_reasoning_content:
+                message_dict.pop("reasoning_content", None)
+
+            #加到api_messages列表中，这是给模型的输入，包含了所有的消息
+            api_messages.append(message_dict)
+
+
+        
+
 
         #构造一个request字典，包含messages和tools
         request :dict[str, Any] = {
@@ -225,22 +242,49 @@ class OpenAICompatibleModel:
             "stream": True,
 
 
-            #sdk没有thinking这个，放到extra_body里，USTC DeepSeek会识别
-            #"thinking": {"type": "enabled"}是deepseek风格的扩展字段
-            "extra_body": {
+            # #sdk没有thinking这个，放到extra_body里，USTC DeepSeek会识别
+            # #"thinking": {"type": "enabled"}是deepseek风格的扩展字段
+            # "extra_body": {
+            #     "thinking": {
+            #         "type": "enabled" if thinking_enabled else "disabled",
+            #     }
+            # }
+        }
+
+        #处理请求中的思考字段，根据不用模型来往请求冲加入不同的思考字段
+        #以下是deepseek的处理
+        #用户要求思考，但是模型不支持思考模式，就抛出异常
+        if thinking_enabled and not self._profile.supports_thinking: 
+            raise ValueError(f"模型 {self._model_name} 不支持思考模式")
+
+        #模型的思考模式是deepseek，就把thinking放到extra_body里，根据用户传入的是thinking_enabled来决定是enabled还是disabled
+        if self._profile.thinking_format == "deepseek":
+            request["extra_body"] = {
                 "thinking": {
                     "type": "enabled" if thinking_enabled else "disabled",
                 }
             }
-        }
+        
 
+        #处理请求中的工具字段
+        #把ToolDefinition对象转化为OpenAI兼容的字典
+        api_tools = [self._tool_to_api(tool) for tool in tools]
 
         #如果tools为空就不传入
         if api_tools:
             request["tools"] = api_tools
 
+
+
+        #处理请求中的reasoning_effort字段
         #如果reasoning_effort不为空就传入
         if reasoning_effort is not None:
+            if not self._profile.supports_reasoning_effort:
+                raise ValueError(
+                    f"模型 {self._profile.name} "
+                    "不支持 reasoning_effort"
+                )
+
             request["reasoning_effort"] = reasoning_effort
 
 

@@ -22,7 +22,7 @@ from app.services.run_service import RunService
 class AgentRuntime:
     """
     协调一次完整 Run 的执行。
- 
+
     它不负责让 LLM 思考；
     它只负责把状态、事件、Run 生命周期和 Agent 串起来。
     """
@@ -35,7 +35,7 @@ class AgentRuntime:
         run_repository: RunRepository | None = None,
         run_service: RunService | None = None,
     ) -> None:
-        
+
         self._stream_bridge = stream_bridge
         self._checkpoint_repository = checkpoint_repository or CheckpointRepository()
         self._thread_repository = thread_repository or ThreadRepository()
@@ -52,11 +52,11 @@ class AgentRuntime:
         thread = self._thread_repository.get(thread_id, user_id)
         if thread is None:
             raise ValueError(f"Thread with id {thread_id} and user_id {user_id} does not exist.")
-        
+
         run = self._run_repository.get(run_id, user_id)
         if run is None or run.thread_id != thread_id:
             raise ValueError("Run 不存在，或不属于当前 Thread")
-        
+
         return thread, run
 
 
@@ -85,9 +85,9 @@ class AgentRuntime:
 
 
 
-    def _create_checkpoint_saver(self, 
-        user_id: str, 
-        thread: Thread, 
+    def _create_checkpoint_saver(self,
+        user_id: str,
+        thread: Thread,
         run: Run) -> Callable[[ThreadState], Checkpoint]:
 
 
@@ -101,10 +101,10 @@ class AgentRuntime:
 
         history = self._checkpoint_repository.history(thread.id, user_id, run.id)
 
-    
+
 
         if history:
-            next_step = history[-1].step +1 
+            next_step = history[-1].step +1
         else:
             next_step = 1
 
@@ -126,9 +126,9 @@ class AgentRuntime:
 
 
 
-    async def run(self, 
-        user_id: str, 
-        thread_id: str, 
+    async def run(self,
+        user_id: str,
+        thread_id: str,
         run_id: str,
         user_message: str,
         agent: Agent) -> ThreadState:
@@ -136,7 +136,7 @@ class AgentRuntime:
         """
         用户发送一条消息后，系统保存这条消息、
         启动 Run、实时显示“任务开始”，
-        把任务交给 Agent；Agent 
+        把任务交给 Agent；Agent
         成功后保存结果并结束任务，
         出错则记录错误并结束直播。
         """
@@ -152,7 +152,7 @@ class AgentRuntime:
         #2 创建一个专属的“保存状态按钮”，每次调用都会保存一份 Checkpoint，并自动增加 step
         save_checkpoint = self._create_checkpoint_saver(user_id, thread, run)
 
-        #3 创建一个专属的“事件发布器”，每次调用都会把事件发送给前端
+        #3 创建一个event recorder，记录事件到数据库，并实时推送到前端
         recorder = EventRecorder(
             user_id=user_id,
             thread_id=thread.id,
@@ -173,9 +173,9 @@ class AgentRuntime:
             )
 
             #保存用户消息的 Checkpoint
-            save_checkpoint(state)  
+            save_checkpoint(state)
 
-            
+
 
             # 6. 只有 Run 成功从 pending 变成 running，
             # 才允许继续调用 Agent。
@@ -190,8 +190,8 @@ class AgentRuntime:
 
             #7 保存并实时推送
             await recorder.record_event("run.start",
-                {"model_name": run.model_name, 
-                 "thinking_enabled": run.thinking_enabled, 
+                {"model_name": run.model_name,
+                 "thinking_enabled": run.thinking_enabled,
                  "reasoning_effort": run.reasoning_effort})
 
 

@@ -4,6 +4,7 @@
 """
 
 from concurrent.futures import thread
+import os
 import shutil
 from pathlib import Path
 from app.domain.common import new_id
@@ -13,6 +14,17 @@ from app.repositories.thread_repository import ThreadRepository
 
 #一个用户目录
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data" / "users" # resolve()返回绝对路径，parents[2]返回到第三个父目录。__file__是当前文件的路径，PATH把她变为一个PATH对象方便操作，
+
+
+def resolve_data_root() -> Path:
+    """返回 Thread 文件根目录；环境变量只接受绝对路径。"""
+    configured = os.getenv("DEER_MINI_DATA_ROOT")
+    if not configured:
+        return DATA_ROOT
+    path = Path(configured)
+    if not path.is_absolute():
+        raise ValueError("DEER_MINI_DATA_ROOT 必须是绝对路径")
+    return path.resolve()
 
 
 class ThreadService:
@@ -30,7 +42,7 @@ class ThreadService:
 
         thread_id = new_id()     #生成一个会话id
         self._validate_path_segment(user_id,"user_id")   #检查下是否是非法用户id
-        thread_dir = DATA_ROOT / user_id / "threads" / thread_id #每个用户会话的工作目录
+        thread_dir = resolve_data_root() / user_id / "threads" / thread_id #每个用户会话的工作目录
 
         workspace_path = thread_dir / "workspace"
         uploads_path = thread_dir / "uploads"

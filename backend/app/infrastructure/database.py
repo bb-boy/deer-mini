@@ -5,9 +5,21 @@ initialize_database()：创建 threads、runs、checkpoints、run_events 四张�
 """
 
 import sqlite3
+import os
 from pathlib import Path
 
 DATABASE_PATH = Path(__file__).resolve().parents[2] / "data" / "deer_mini.db" #resolve()返回绝对路径，parents[2]返回到第三个父目录。__file__是当前文件的路径，PATH把她变为一个PATH对象方便操作，
+
+
+def resolve_database_path() -> Path:
+    """返回本进程使用的 SQLite 文件；环境变量只接受绝对路径。"""
+    configured = os.getenv("DEER_MINI_DATABASE_PATH")
+    if not configured:
+        return DATABASE_PATH
+    path = Path(configured)
+    if not path.is_absolute():
+        raise ValueError("DEER_MINI_DATABASE_PATH 必须是绝对路径")
+    return path.resolve()
 
 
 def connect() ->sqlite3.Connection:
@@ -16,8 +28,9 @@ def connect() ->sqlite3.Connection:
     :return: sqlite3.Connection
     """
 
-    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)  # 确保 data 文件夹存在
-    conn = sqlite3.connect(DATABASE_PATH)
+    database_path = resolve_database_path()
+    database_path.parent.mkdir(parents=True, exist_ok=True)  # 确保 data 文件夹存在
+    conn = sqlite3.connect(database_path)
     conn.row_factory = sqlite3.Row  # 设置行工厂，默认是元组返回，设置行工厂就会可以通过row["name"]来访问
     conn.execute("PRAGMA foreign_keys = ON;") #打开外键约束检查
     return conn
@@ -98,4 +111,3 @@ def initialize_database() -> None:
             CREATE INDEX IF NOT EXISTS idx_run_events_thread_id ON run_events(thread_id);
             """
         )
-

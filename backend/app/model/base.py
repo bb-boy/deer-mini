@@ -45,3 +45,9 @@ class ChatModel(Protocol):
         :return: 消息
         """
         ...
+
+    async def close(self) -> None:
+        """
+        关闭模型客户端持有的网络连接。
+        """
+        ...

@@ -17,6 +17,8 @@ RunEventType = Literal[
     "tool.end",
     "run.end",
     "run.error",
+    "run.interrupted",
+    "run.timeout",
     ]
 
 
@@ -84,4 +86,3 @@ class RunEvent:
             sequence=data["sequence"],
             created_at=data["created_at"],
         )
-

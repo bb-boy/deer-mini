@@ -4,6 +4,7 @@
 
 
 
+import asyncio
 from typing import Callable
 from app.domain.messages import Message
 from app.domain.checkpoints import Checkpoint
@@ -131,7 +132,9 @@ class AgentRuntime:
         thread_id: str,
         run_id: str,
         user_message: str,
-        agent: Agent) -> ThreadState:
+        agent: Agent,
+        timeout_seconds: float = 240.0,
+    ) -> ThreadState:
 
         """
         用户发送一条消息后，系统保存这条消息、
@@ -161,6 +164,7 @@ class AgentRuntime:
         )
 
         started =  False
+        state: ThreadState | None = None
 
         try:
 
@@ -212,8 +216,11 @@ class AgentRuntime:
                 save_checkpoint=save_checkpoint,
             )
 
-            #10 把上下文传给Agent，让Agent去处理用户消息
-            final_state = await agent.run(state, context)
+            #10 把上下文传给 Agent，并限制整个模型/工具循环的最长时间。
+            # asyncio.timeout 到期时会先取消 agent.run，让 LeadAgent 的
+            # finally 有机会关闭真实模型客户端，然后在这里抛出 TimeoutError。
+            async with asyncio.timeout(timeout_seconds):
+                final_state = await agent.run(state, context)
 
 
 
@@ -241,6 +248,59 @@ class AgentRuntime:
                 raise RuntimeError("Run 无法结束为 success")
 
             return final_state
+
+        except TimeoutError:
+            timeout_message = (
+                f"Agent Run exceeded {timeout_seconds:g} seconds"
+            )
+            try:
+                if state is not None:
+                    # 保留超时发生时已经完成的消息和工具结果。
+                    save_checkpoint(state)
+                await recorder.record_event(
+                    "run.timeout",
+                    {
+                        "status": "timeout",
+                        "timeout_seconds": timeout_seconds,
+                        "message": timeout_message,
+                    },
+                )
+            finally:
+                self._run_service.finish_run(
+                    run_id,
+                    user_id,
+                    "timeout",
+                    timeout_message,
+                )
+
+            # 后台任务仍以 TimeoutError 结束，Coordinator 会把它当作
+            # 已正确收尾的预期终态，而不是未知程序错误。
+            raise
+
+        except asyncio.CancelledError as cancel_error:
+            # task.cancel() 会在当前 await 位置抛出 CancelledError。
+            # 必须显式保存 interrupted；它不属于普通 Exception。
+            cancel_reason = str(cancel_error) or "cancelled"
+            try:
+                if state is not None:
+                    # 保存取消瞬间已经形成的完整消息，方便之后查看和继续对话。
+                    save_checkpoint(state)
+                await recorder.record_event(
+                    "run.interrupted",
+                    {
+                        "status": "interrupted",
+                        "reason": cancel_reason,
+                    },
+                )
+            finally:
+                self._run_service.interrupt_run(
+                    run_id,
+                    user_id,
+                    cancel_reason,
+                )
+
+            # 保留 asyncio 的取消语义，让 Coordinator 知道任务确实被取消。
+            raise
 
         except Exception as error:
             # Agent 或 Runtime 出错时，记录错误并更新 Run 状态。

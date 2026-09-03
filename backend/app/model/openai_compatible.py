@@ -499,6 +499,12 @@ class OpenAICompatibleModel:
             tool_calls=completed_tool_calls
         )
 
+    async def close(self) -> None:
+        """
+        关闭 AsyncOpenAI 客户端及其底层 HTTP 连接池。
+        """
+        await self._client.close()
+
 
 
 

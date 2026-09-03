@@ -6,3 +6,11 @@ python-dotenv==1.2.3
 
 # 项目当前使用的测试工具
 pytest==9.1.1
+
+# HTTP API、开发服务器和 API 测试客户端
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+httpx==0.28.1
+
+# 解析浏览器上传文件使用的 multipart/form-data
+python-multipart==0.0.32

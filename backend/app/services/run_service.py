@@ -1,29 +1,36 @@
-""""
-处理一个具体的run的建立和持久化
-
-
-"""
-
-
-
-
-from pdb import run
+"""处理一个具体 Run 的创建、查询和生命周期。"""
 
 from app.domain.common import new_id
 from app.domain.runs import Run
+from app.repositories.run_lifecycle_repository import RunLifecycleRepository
 from app.repositories.run_repository import RunRepository
-
-
-from app.domain.threads import Thread
 import sqlite3
 
 from app.repositories.thread_repository import ThreadRepository
 
 
 class RunService:
-    def __init__(self, runrepo: RunRepository | None = None,threadrepo:ThreadRepository | None = None) -> None:
+    def __init__(
+        self,
+        runrepo: RunRepository | None = None,
+        threadrepo: ThreadRepository | None = None,
+        lifecycle_repo: RunLifecycleRepository | None = None,
+    ) -> None:
         self._runrepo = runrepo if runrepo is not None else RunRepository()  #实例化一个RunRepository对象
         self._threadrepo = threadrepo if threadrepo is not None else ThreadRepository()  #实例化一个ThreadRepository对象
+        self._lifecycle_repo = (
+            lifecycle_repo
+            if lifecycle_repo is not None
+            else RunLifecycleRepository()
+        )
+
+    def get_run(self, run_id: str, user_id: str) -> Run | None:
+        """读取属于指定用户的一次 Run。"""
+        return self._runrepo.get(run_id, user_id)
+
+    def list_inflight_runs(self) -> list[Run]:
+        """读取应用启动前遗留的 pending/running Run。"""
+        return self._runrepo.list_inflight()
 
     def create_run(self, 
                    user_id: str,
@@ -62,7 +69,7 @@ class RunService:
 
 
     #start run的同时更新thread的状态从 idle变为running
-    
+
     def start_run(self,run_id:str,user_id:str) -> bool:
         """
         启动一个run并更新其关联thread的状态
@@ -75,15 +82,7 @@ class RunService:
         if run is None:
             raise ValueError(f"Run with id {run_id} and user_id {user_id} does not exist.")
     
-        thread_id = run.thread_id
-        #更新run的状态
-        run_started = self._runrepo.start(run_id,user_id)
-        if not run_started:
-            return False
-        thread_started = self._threadrepo.update_status(thread_id,user_id,"running")
-        if not thread_started:
-            return False
-        return True
+        return self._lifecycle_repo.start(run_id, user_id)
 
 
     def finish_run(self, run_id: str, user_id: str, status: str, error: str | None = None) -> bool:
@@ -99,14 +98,44 @@ class RunService:
         if run is None:
             raise ValueError(f"Run with id {run_id} and user_id {user_id} does not exist.")
 
-        thread_id = run.thread_id
-        #更新run的状态
-        run_finished = self._runrepo.finish(run_id, user_id, status, error)
-        if not run_finished:
-            return False
-        thread_finished = self._threadrepo.update_status(thread_id, user_id, "idle")
-        if not thread_finished:
-            return False
-        return True
+        return self._lifecycle_repo.finish(run_id, user_id, status, error)
 
-    
+    def interrupt_run(
+        self,
+        run_id: str,
+        user_id: str,
+        reason: str = "cancelled_by_user",
+    ) -> bool:
+        """
+        停止一个 pending/running Run，并让所属 Thread 恢复为 idle。
+
+        返回 False 表示 Run 已经结束，调用者不需要再次修改它。
+        """
+        run = self._runrepo.get(run_id, user_id)
+        if run is None:
+            raise ValueError(
+                f"Run with id {run_id} and user_id {user_id} does not exist."
+            )
+
+        return self._lifecycle_repo.interrupt(run_id, user_id, reason)
+
+    def recover_orphaned_run(
+        self,
+        run_id: str,
+        user_id: str,
+        error: str,
+    ) -> bool:
+        """
+        将孤儿 Run 标记为 error，并让所属 Thread 恢复 idle。
+
+        返回 False 说明它已被其他收尾流程改成终态。
+        """
+        run = self._runrepo.get(run_id, user_id)
+        if run is None:
+            return False
+
+        return self._lifecycle_repo.recover_orphan(
+            run_id,
+            user_id,
+            error,
+        )

@@ -67,6 +67,28 @@ class ThreadRepository:
                 return None
             return self._row_to_thread(row)
 
+    def list_for_user(
+        self,
+        user_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Thread]:
+        """读取一个用户最近更新的 Thread，供浏览器恢复对话列表。"""
+        with connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, user_id, workspace_path, title, status,
+                       created_at, updated_at
+                FROM threads
+                WHERE user_id = ?
+                ORDER BY updated_at DESC, created_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (user_id, limit, offset),
+            ).fetchall()
+        return [self._row_to_thread(row) for row in rows]
+
     def _row_to_thread(self, row: sqlite3.Row) -> Thread:
             """
             将sqlite3.Row对象转换为Thread对象
@@ -110,4 +132,3 @@ class ThreadRepository:
             )
         return cursor.rowcount == 1  # 如果更新了至少一行，返回True，否则返回False
 
-        

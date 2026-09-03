@@ -1,6 +1,8 @@
 """Tests for backend/app/services/run_service.py."""
 
-# 在这里编写 pytest 的 test_* 函数。
+import pytest
+
+from app.infrastructure import database
 
 
 
@@ -17,6 +19,14 @@ from app.services.run_service import RunService
 
 
 from app.domain.common import new_id
+
+
+@pytest.fixture(autouse=True)
+def isolated_database(tmp_path, monkeypatch):
+    """每个测试创建独立 SQLite，避免依赖或修改开发数据库。"""
+    database_path = tmp_path / "deer_mini_test.db"
+    monkeypatch.setattr(database, "DATABASE_PATH", database_path)
+    database.initialize_database()
 
 
 

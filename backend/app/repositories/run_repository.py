@@ -82,6 +82,51 @@ class RunRepository:
         if row is None:
             return None
         return self._row_to_run(row)
+
+    def list_for_thread(
+        self,
+        thread_id: str,
+        user_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Run]:
+        """读取指定用户在一个 Thread 中最近创建的 Run。"""
+        with connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, thread_id, user_id, status, model_name,
+                       thinking_enabled, reasoning_effort, error,
+                       started_at, finished_at, created_at, updated_at
+                FROM runs
+                WHERE thread_id = ? AND user_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (thread_id, user_id, limit, offset),
+            ).fetchall()
+        return [self._row_to_run(row) for row in rows]
+
+    def list_inflight(self) -> list[Run]:
+        """
+        读取所有仍标记为 pending/running 的 Run。
+
+        单进程版在应用启动时调用它；此时内存里还没有任何新任务，
+        因而这些记录都是上一次进程未能完成的孤儿 Run。
+        """
+        with connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, thread_id, user_id, status, model_name,
+                       thinking_enabled, reasoning_effort, error,
+                       started_at, finished_at, created_at, updated_at
+                FROM runs
+                WHERE status IN ('pending', 'running')
+                ORDER BY created_at ASC
+                """
+            ).fetchall()
+
+        return [self._row_to_run(row) for row in rows]
         
 
     def _row_to_run(self, row: sqlite3.Row) -> Run:
@@ -159,6 +204,62 @@ class RunRepository:
 
         return cursor.rowcount == 1  # 如果更新了1行，说明状态更新成功，否则说明状态更新失败
 
+    def interrupt(
+        self,
+        run_id: str,
+        user_id: str,
+        error: str | None = None,
+    ) -> bool:
+        """
+        将尚未结束的 Run 更新为 interrupted。
 
+        同时接受 pending 和 running，是为了处理用户在后台任务真正启动前
+        就点击“停止”的竞态情况。
+        """
+        now = utc_now()
+        with connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE runs
+                SET status = 'interrupted',
+                    error = ?,
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                  AND user_id = ?
+                  AND status IN ('pending', 'running')
+                """,
+                (error, now, now, run_id, user_id),
+            )
 
- 
+        return cursor.rowcount == 1
+
+    def recover_orphan(
+        self,
+        run_id: str,
+        user_id: str,
+        error: str,
+    ) -> bool:
+        """
+        将失去执行进程的 pending/running Run 原子更新为 error。
+
+        WHERE 中再次检查状态，保证重复启动恢复不会重复修改终态 Run。
+        """
+        now = utc_now()
+        with connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE runs
+                SET status = 'error',
+                    error = ?,
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                  AND user_id = ?
+                  AND status IN ('pending', 'running')
+                """,
+                (error, now, now, run_id, user_id),
+            )
+
+        return cursor.rowcount == 1
+

@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
+from pathlib import Path
 
 from app.api.routes import router
 from app.domain.checkpoints import Checkpoint
@@ -13,6 +14,10 @@ from app.infrastructure import database
 from app.repositories.checkpoint_repository import CheckpointRepository
 from app.repositories.run_repository import RunRepository
 from app.repositories.thread_repository import ThreadRepository
+from app.services import thread_service
+from app.services.thread_service import ThreadService
+from app.services.run_coordinator import RunCoordinator
+from app.runtime.stream_bridge import MemoryStreamBridge
 
 
 @pytest.fixture()
@@ -21,6 +26,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "query_api.db")
     database.initialize_database()
     app = FastAPI()
+    app.state.run_coordinator = RunCoordinator(MemoryStreamBridge(), bash_runner=None)
     app.include_router(router)
     with TestClient(app) as test_client:
         yield test_client
@@ -119,6 +125,47 @@ def test_get_thread_checks_user_ownership(client):
     assert response.status_code == 200
     assert response.json()["id"] == "owned-thread"
     assert forbidden.status_code == 404
+
+
+def test_update_thread_title_is_user_scoped(client):
+    save_thread(
+        "rename-thread",
+        "alice",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+
+    response = client.patch(
+        "/api/threads/rename-thread",
+        params={"user_id": "alice"},
+        json={"title": "更新后的标题"},
+    )
+    forbidden = client.patch(
+        "/api/threads/rename-thread",
+        params={"user_id": "bob"},
+        json={"title": "不应成功"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "更新后的标题"
+    assert forbidden.status_code == 404
+
+
+def test_delete_thread_removes_owned_thread_and_workspace(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(thread_service, "DATA_ROOT", tmp_path / "users")
+    thread = ThreadService().create_thread("alice", "待删除")
+    workspace_parent = Path(thread.workspace_path).parent
+
+    response = client.delete(
+        f"/api/threads/{thread.id}",
+        params={"user_id": "alice"},
+    )
+
+    assert response.status_code == 204
+    assert not workspace_parent.exists()
+    assert client.get(
+        f"/api/threads/{thread.id}", params={"user_id": "alice"}
+    ).status_code == 404
 
 
 def test_list_runs_is_thread_scoped_and_newest_first(client):

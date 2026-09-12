@@ -1,5 +1,7 @@
 """RunCoordinator 的 Bash 工具开关与配置测试。"""
 
+import asyncio
+
 import pytest
 
 from app.sandbox.base import CommandResult
@@ -9,6 +11,7 @@ from app.sandbox.docker_runner import (
 )
 from app.services.run_coordinator import RunCoordinator
 from app.runtime.stream_bridge import MemoryStreamBridge
+import app.services.run_coordinator as run_coordinator_module
 
 
 class RecordingRunner:
@@ -19,6 +22,8 @@ class RecordingRunner:
         *,
         command: str,
         workspace_path: str,
+        user_id: str,
+        thread_id: str,
         run_id: str,
         tool_call_id: str,
     ) -> CommandResult:
@@ -77,6 +82,8 @@ def test_load_docker_runner_from_environment(
     monkeypatch.setenv("DEER_MINI_BASH_CPU_LIMIT", "0.5")
     monkeypatch.setenv("DEER_MINI_BASH_PIDS_LIMIT", "32")
     monkeypatch.setenv("DEER_MINI_BASH_NETWORK_ENABLED", "yes")
+    monkeypatch.setenv("DEER_MINI_SANDBOX_IDLE_TIMEOUT_SECONDS", "120")
+    monkeypatch.setenv("DEER_MINI_SANDBOX_CHECK_INTERVAL_SECONDS", "5")
 
     runner = load_docker_runner_from_env()
 
@@ -88,6 +95,8 @@ def test_load_docker_runner_from_environment(
     assert runner.config.cpu_limit == 0.5
     assert runner.config.pids_limit == 32
     assert runner.config.network_enabled is True
+    assert runner.config.idle_timeout_seconds == 120
+    assert runner.config.idle_check_interval_seconds == 5
 
 
 def test_disabled_environment_returns_no_runner(
@@ -96,6 +105,38 @@ def test_disabled_environment_returns_no_runner(
     monkeypatch.setenv("DEER_MINI_BASH_ENABLED", "false")
 
     assert load_docker_runner_from_env() is None
+
+
+def test_start_cleans_orphaned_containers_even_when_bash_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def cleanup_containers() -> None:
+        calls.append("containers")
+
+    async def cleanup_directories() -> None:
+        calls.append("directories")
+
+    monkeypatch.setenv("DEER_MINI_BASH_ENABLED", "false")
+    monkeypatch.setattr(
+        run_coordinator_module,
+        "cleanup_orphaned_thread_sandboxes",
+        cleanup_containers,
+    )
+    monkeypatch.setattr(
+        run_coordinator_module,
+        "cleanup_pending_thread_deletions",
+        cleanup_directories,
+    )
+    coordinator = RunCoordinator(
+        MemoryStreamBridge(),
+        run_timeout_seconds=10,
+    )
+
+    asyncio.run(coordinator.start())
+
+    assert calls == ["directories", "containers"]
 
 
 @pytest.mark.parametrize(

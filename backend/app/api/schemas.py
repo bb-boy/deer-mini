@@ -17,6 +17,12 @@ class CreateThreadRequest(BaseModel):
     title: str | None = None
 
 
+class UpdateThreadRequest(BaseModel):
+    """更新 Thread 展示信息。"""
+
+    title: str = Field(min_length=1, max_length=200)
+
+
 class ThreadResponse(BaseModel):
     """返回给浏览器的 Thread 信息。"""
 

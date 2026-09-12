@@ -56,6 +56,8 @@ class BashTool:
             result = await self._runner.run(
                 command=command,
                 workspace_path=context.workspace_path,
+                user_id=context.user_id,
+                thread_id=context.thread_id,
                 run_id=context.run_id,
                 tool_call_id=call.id,
             )

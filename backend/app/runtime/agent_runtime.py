@@ -17,6 +17,7 @@ from app.runtime.agent import Agent
 from app.runtime.context import RuntimeContext
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.stream_bridge import MemoryStreamBridge
+from app.sandbox.base import SandboxLifecycle
 from app.services.run_service import RunService
 
 
@@ -35,6 +36,7 @@ class AgentRuntime:
         thread_repository: ThreadRepository | None = None,
         run_repository: RunRepository | None = None,
         run_service: RunService | None = None,
+        sandbox_lifecycle: SandboxLifecycle | None = None,
     ) -> None:
 
         self._stream_bridge = stream_bridge
@@ -42,6 +44,7 @@ class AgentRuntime:
         self._thread_repository = thread_repository or ThreadRepository()
         self._run_repository = run_repository or RunRepository()
         self._run_service = run_service or RunService()
+        self._sandbox_lifecycle = sandbox_lifecycle
 
 
     #检查用户是否用哟这个对话，以及这个这个run是否存在或者是否属于这个对话
@@ -192,6 +195,13 @@ class AgentRuntime:
             # 后续发生异常时，Runtime 才能安全把 Run 结束为 error。
             started = True
 
+            # Run 期间占用已有容器；没有容器时，仍等首次 Bash 才创建。
+            if self._sandbox_lifecycle is not None:
+                await self._sandbox_lifecycle.begin_run(
+                    user_id=user_id, thread_id=thread_id, run_id=run_id,
+                    workspace_path=thread.workspace_path,
+                )
+
             #7 保存并实时推送
             await recorder.record_event("run.start",
                 {"model_name": run.model_name,
@@ -326,5 +336,19 @@ class AgentRuntime:
             raise
 
         finally:
-            # 成功、失败都必须结束直播；否则浏览器会一直等待。
-            await self._stream_bridge.publish_end(run_id)
+            try:
+                if self._sandbox_lifecycle is not None:
+                    try:
+                        # 空闲锁下直接归还，不在 Run 终态与归还之间额外调度任务。
+                        await self._sandbox_lifecycle.end_run(
+                            user_id=user_id, thread_id=thread_id, run_id=run_id,
+                        )
+                    except asyncio.CancelledError:
+                        cleanup = asyncio.create_task(self._sandbox_lifecycle.end_run(
+                            user_id=user_id, thread_id=thread_id, run_id=run_id,
+                        ))
+                        await asyncio.shield(cleanup)
+                        raise
+            finally:
+                # 归还失败也必须结束直播，避免浏览器一直等待。
+                await self._stream_bridge.publish_end(run_id)

@@ -1,4 +1,4 @@
-"""在一次性受限 Docker 容器中执行命令。"""
+"""受限 Docker 操作：创建容器、执行 Bash、检查状态和删除。"""
 
 import asyncio
 from asyncio.subprocess import PIPE, STDOUT, Process
@@ -147,6 +147,8 @@ class DockerRunnerConfig:
     pids_limit: int = 64
     network_enabled: bool = False
     docker_binary: str = "docker"
+    idle_timeout_seconds: float = 600.0
+    idle_check_interval_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if not self.image.strip():
@@ -162,10 +164,13 @@ class DockerRunnerConfig:
             raise ValueError("Docker PID 限制必须大于 0")
         if not self.docker_binary.strip():
             raise ValueError("Docker 可执行文件不能为空")
+        for value in (self.idle_timeout_seconds, self.idle_check_interval_seconds):
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError("容器闲置超时和检查间隔必须是大于 0 的有限数字")
 
 
 class DockerCommandRunner:
-    """为每次工具调用创建一个独立、用完即删的容器。"""
+    """执行 Docker 操作；ThreadSandboxManager 决定容器何时复用或回收。"""
 
     def __init__(self, config: DockerRunnerConfig | None = None) -> None:
         self.config = config or DockerRunnerConfig()
@@ -247,13 +252,91 @@ class DockerCommandRunner:
         workspace_path: str,
         run_id: str,
         tool_call_id: str,
+        user_id: str | None = None,
+        thread_id: str | None = None,
     ) -> CommandResult:
+        """独立调用时的一次性执行入口；应用中的 Bash 由共享管理器接管。"""
         container_name, args = self.build_run_args(
             command=command,
             workspace_path=workspace_path,
             run_id=run_id,
             tool_call_id=tool_call_id,
         )
+        return await self._run_process(container_name, args)
+
+    async def start_container(
+        self,
+        *,
+        container_name: str,
+        workspace_path: str,
+        user_id: str,
+        thread_id: str,
+        scope: str,
+    ) -> None:
+        """复用已有资源限制与目录挂载，让容器在后台保持运行。"""
+        _, args = self.build_run_args(
+            command="", workspace_path=workspace_path,
+            run_id=thread_id, tool_call_id="sandbox",
+        )
+        args[args.index("--name") + 1] = container_name
+        args[2:2] = [
+            "--detach", "--init",
+            "--label", f"deer-mini.sandbox-owner={scope}",
+            "--label", f"deer-mini.user-id={user_id}",
+            "--label", f"deer-mini.thread-id={thread_id}",
+        ]
+        # 主进程保持存活，每次 Bash 则通过 docker exec 启动独立 Shell。
+        args[-3:] = ["sleep", "infinity"]
+        result = await self._run_process(container_name, args)
+        if result.timed_out or result.exit_code != 0:
+            raise RuntimeError(f"创建 Thread 容器失败：{result.output}")
+
+    async def run_in_container(
+        self, *, container_name: str, command: str
+    ) -> CommandResult:
+        return await self._run_process(container_name, [
+            self.config.docker_binary, "exec", "--workdir", "/workspace",
+            container_name, "/bin/bash", "-lc", command,
+        ])
+
+    async def _docker_query(self, *args: str) -> tuple[int, str]:
+        """读取少量 Docker 状态；连接故障不能被误判为容器不存在。"""
+        process = await self._start_process([self.config.docker_binary, *args])
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+        except BaseException:
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            await process.wait()
+            raise
+        return process.returncode, output.decode("utf-8", errors="replace").strip()
+
+    async def container_is_running(self, container_name: str) -> bool:
+        code, output = await self._docker_query(
+            "inspect", "--format", "{{.State.Running}}", container_name
+        )
+        if code == 0 and output in {"true", "false"}:
+            return output == "true"
+        if "no such object" in output.lower() or "no such container" in output.lower():
+            return False
+        raise RuntimeError(f"无法确认 Docker 容器状态：{output}")
+
+    async def remove_container(self, container_name: str) -> None:
+        await self._remove_container(container_name)
+
+    async def remove_owned_containers(self, scope: str) -> None:
+        code, output = await self._docker_query(
+            "ps", "--all", "--quiet", "--filter", f"label=deer-mini.sandbox-owner={scope}"
+        )
+        if code != 0:
+            raise RuntimeError(f"无法检查遗留 Thread 容器：{output}")
+        for container_id in output.splitlines():
+            await self._remove_container(container_id)
+
+    async def _run_process(self, container_name: str, args: list[str]) -> CommandResult:
         launch_task = asyncio.create_task(
             self._start_process(args),
             name=f"bash-start-{container_name}",
@@ -370,7 +453,7 @@ class DockerCommandRunner:
         process: Process,
         container_name: str,
     ) -> None:
-        """先结束 docker run 客户端，再强制删除可能已创建的容器。"""
+        """先结束 Docker 客户端，再删容器；只杀 exec 客户端不会停止容器内命令。"""
         if process.returncode is None:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
@@ -448,5 +531,7 @@ def load_docker_runner_from_env() -> DockerCommandRunner | None:
             False,
         ),
         docker_binary=os.getenv("DEER_MINI_DOCKER_BINARY", "docker"),
+        idle_timeout_seconds=_load_float("DEER_MINI_SANDBOX_IDLE_TIMEOUT_SECONDS", "600"),
+        idle_check_interval_seconds=_load_float("DEER_MINI_SANDBOX_CHECK_INTERVAL_SECONDS", "60"),
     )
     return DockerCommandRunner(config)

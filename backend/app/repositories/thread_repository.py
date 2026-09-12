@@ -11,7 +11,7 @@ get(thread_id,user_id)从sqlite数据库中获取一个thread对象
 import sqlite3
 
 from app.domain.common import utc_now
-from app.domain.threads import Thread, ThreadState
+from app.domain.threads import Thread
 from app.infrastructure.database import connect
 
 
@@ -132,3 +132,29 @@ class ThreadRepository:
             )
         return cursor.rowcount == 1  # 如果更新了至少一行，返回True，否则返回False
 
+    def update_title(self, thread_id: str, user_id: str, title: str) -> Thread | None:
+        """更新 Thread 标题并返回最新记录。"""
+        with connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE threads
+                SET title = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (title, utc_now(), thread_id, user_id),
+            )
+        if cursor.rowcount != 1:
+            return None
+        return self.get(thread_id, user_id)
+
+    def delete(self, thread_id: str, user_id: str) -> Thread | None:
+        """删除属于当前用户的 Thread，并依赖外键级联清理运行记录。"""
+        thread = self.get(thread_id, user_id)
+        if thread is None:
+            return None
+        with connect() as conn:
+            conn.execute(
+                "DELETE FROM threads WHERE id = ? AND user_id = ?",
+                (thread_id, user_id),
+            )
+        return thread

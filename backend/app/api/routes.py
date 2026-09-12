@@ -10,6 +10,7 @@ from app.api.schemas import (
     CheckpointResponse,
     CreateRunRequest,
     CreateThreadRequest,
+    UpdateThreadRequest,
     RunResponse,
     ThreadResponse,
     WorkspaceFileResponse,
@@ -110,6 +111,57 @@ def get_thread(
     return ThreadResponse.model_validate(
         _require_owned_thread(thread_id, user_id)
     )
+
+
+@router.patch(
+    "/threads/{thread_id}",
+    response_model=ThreadResponse,
+)
+def update_thread(
+    thread_id: str,
+    body: UpdateThreadRequest,
+    user_id: str = Query(min_length=1),
+) -> ThreadResponse:
+    """更新当前用户 Thread 的标题。"""
+    _require_owned_thread(thread_id, user_id)
+    try:
+        thread = ThreadService().rename_thread(thread_id, user_id, body.title)
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+    return ThreadResponse.model_validate(thread)
+
+
+@router.delete(
+    "/threads/{thread_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_thread(
+    thread_id: str,
+    request: Request,
+    user_id: str = Query(min_length=1),
+) -> None:
+    """删除当前用户 Thread 及其 Workspace。"""
+    _require_owned_thread(thread_id, user_id)
+    try:
+        await _coordinator(request).delete_thread(thread_id=thread_id, user_id=user_id)
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
 
 
 @router.post(

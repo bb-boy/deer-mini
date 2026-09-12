@@ -67,6 +67,8 @@ def test_bash_tool_runs_command_in_runtime_workspace(tmp_path: Path):
         {
             "command": "wc -l report.csv",
             "workspace_path": str(tmp_path),
+            "user_id": "alice",
+            "thread_id": "thread-1",
             "run_id": "run-1",
             "tool_call_id": "call-1",
         }

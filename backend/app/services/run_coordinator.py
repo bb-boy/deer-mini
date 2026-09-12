@@ -15,8 +15,16 @@ from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.stream_bridge import MemoryStreamBridge
 from app.sandbox.base import CommandRunner
-from app.sandbox.docker_runner import load_docker_runner_from_env
+from app.sandbox.docker_runner import DockerCommandRunner, load_docker_runner_from_env
+from app.sandbox.manager import (
+    ThreadSandboxManager,
+    cleanup_orphaned_thread_sandboxes,
+)
 from app.services.run_service import RunService
+from app.services.thread_service import (
+    ThreadService,
+    cleanup_pending_thread_deletions,
+)
 from app.tools.bash import BashTool
 from app.tools.executor import ToolExecutor
 from app.tools.read_file import ReadFileTool
@@ -72,12 +80,19 @@ class RunCoordinator:
             raise ValueError("run_timeout_seconds 必须是大于 0 的有限数字")
         # 默认不暴露 Bash。只有环境变量显式开启，或测试/调用方注入 Runner
         # 时，模型的 tools 列表中才会出现 bash。
-        if bash_runner is _AUTO_BASH_RUNNER:
+        self._uses_environment_bash_config = bash_runner is _AUTO_BASH_RUNNER
+        if self._uses_environment_bash_config:
             self._bash_runner: CommandRunner | None = (
                 load_docker_runner_from_env()
             )
         else:
             self._bash_runner = cast(CommandRunner | None, bash_runner)
+        self._sandbox_manager: ThreadSandboxManager | None = None
+        if isinstance(self._bash_runner, DockerCommandRunner):
+            self._sandbox_manager = ThreadSandboxManager(self._bash_runner)
+            self._bash_runner = self._sandbox_manager
+        elif isinstance(self._bash_runner, ThreadSandboxManager):
+            self._sandbox_manager = self._bash_runner
         # 按 run_id 保存后台任务，取消接口才能找到指定的 Agent Loop。
         self._tasks: dict[str, asyncio.Task[ThreadState]] = {}
 
@@ -124,7 +139,9 @@ class RunCoordinator:
                 reasoning_effort=reasoning_effort,
             )
             task = asyncio.create_task(
-                AgentRuntime(self._stream_bridge).run(
+                AgentRuntime(
+                    self._stream_bridge, sandbox_lifecycle=self._sandbox_manager
+                ).run(
                     user_id=user_id,
                     thread_id=thread_id,
                     run_id=run.id,
@@ -274,6 +291,31 @@ class RunCoordinator:
             )
         return recovered_runs
 
+    async def start(self) -> None:
+        await cleanup_pending_thread_deletions()
+        if self._sandbox_manager is not None:
+            await self._sandbox_manager.start()
+        elif self._uses_environment_bash_config:
+            await cleanup_orphaned_thread_sandboxes()
+
+    async def delete_thread(self, *, user_id: str, thread_id: str) -> None:
+        async def delete_workspace() -> None:
+            # 删除容器会 await；回来后重新确认没有新建的 pending Run。
+            if any(
+                run.user_id == user_id and run.thread_id == thread_id
+                for run in self._run_service.list_inflight_runs()
+            ):
+                raise RuntimeError("运行中或等待执行的 Thread 不能删除")
+            await ThreadService().delete_thread(thread_id, user_id)
+
+        if self._sandbox_manager is None:
+            await delete_workspace()
+        else:
+            await self._sandbox_manager.delete_thread(
+                user_id=user_id, thread_id=thread_id,
+                delete_workspace=delete_workspace,
+            )
+
     async def shutdown(self) -> None:
         """应用退出时取消仍在运行的 Agent，避免遗留 running Run。"""
         tasks = list(self._tasks.values())
@@ -281,6 +323,8 @@ class RunCoordinator:
             task.cancel("server_shutdown")
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if self._sandbox_manager is not None:
+            await self._sandbox_manager.close()
 
     def _consume_finished_task(
         self,

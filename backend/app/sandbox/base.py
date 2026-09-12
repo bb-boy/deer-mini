@@ -22,7 +22,21 @@ class CommandRunner(Protocol):
         *,
         command: str,
         workspace_path: str,
+        user_id: str,
+        thread_id: str,
         run_id: str,
         tool_call_id: str,
     ) -> CommandResult:
+        ...
+
+
+class SandboxLifecycle(Protocol):
+    """Runtime 只负责通知 Run 边界，不参与 Docker 的具体操作。"""
+
+    async def begin_run(
+        self, *, user_id: str, thread_id: str, run_id: str, workspace_path: str
+    ) -> None:
+        ...
+
+    async def end_run(self, *, user_id: str, thread_id: str, run_id: str) -> None:
         ...

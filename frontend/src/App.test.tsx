@@ -10,6 +10,8 @@ const getLatestStateMock = vi.fn();
 const listRunsMock = vi.fn();
 const listWorkspaceFilesMock = vi.fn();
 const startAgentRunMock = vi.fn();
+const renameThreadMock = vi.fn();
+const deleteThreadMock = vi.fn();
 
 vi.mock("./api/client", () => ({
   listThreads: (...args: unknown[]) => listThreadsMock(...args),
@@ -17,6 +19,8 @@ vi.mock("./api/client", () => ({
   getLatestState: (...args: unknown[]) => getLatestStateMock(...args),
   listRuns: (...args: unknown[]) => listRunsMock(...args),
   listWorkspaceFiles: (...args: unknown[]) => listWorkspaceFilesMock(...args),
+  renameThread: (...args: unknown[]) => renameThreadMock(...args),
+  deleteThread: (...args: unknown[]) => deleteThreadMock(...args),
   uploadWorkspaceFile: vi.fn(),
   workspaceFileDownloadUrl: vi.fn(() => "/download"),
 }));
@@ -82,6 +86,8 @@ beforeEach(() => {
   listRunsMock.mockReset().mockResolvedValue([]);
   listWorkspaceFilesMock.mockReset().mockResolvedValue([]);
   startAgentRunMock.mockReset().mockResolvedValue(undefined);
+  renameThreadMock.mockReset();
+  deleteThreadMock.mockReset();
 });
 
 describe("App", () => {
@@ -109,5 +115,42 @@ describe("App", () => {
       expect.objectContaining({ message: "分析 report.txt" }),
       thread,
     );
+  });
+
+  it("keeps a successful rename when refreshing the list fails", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "报告分析" });
+    renameThreadMock.mockResolvedValue({ ...thread, title: "新的标题" });
+    listThreadsMock.mockRejectedValueOnce(new Error("refresh failed"));
+
+    fireEvent.click(screen.getByTitle("更多操作：报告分析"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "重命名" }));
+    fireEvent.change(screen.getByLabelText("对话名称"), {
+      target: { value: "新的标题" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(await screen.findByRole("heading", { name: "新的标题" })).toBeTruthy();
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "标题已更新，但重新加载对话列表失败",
+    );
+    expect(screen.queryByRole("dialog", { name: "重命名对话" })).toBeNull();
+  });
+
+  it("removes a successfully deleted thread when refreshing the list fails", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "报告分析" });
+    deleteThreadMock.mockResolvedValue(undefined);
+    listThreadsMock.mockRejectedValueOnce(new Error("refresh failed"));
+
+    fireEvent.click(screen.getByTitle("更多操作：报告分析"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "删除对话" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    expect(await screen.findByRole("heading", { name: "新的对话" })).toBeTruthy();
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "对话已删除，但重新加载对话列表失败",
+    );
+    expect(screen.queryByTitle("更多操作：报告分析")).toBeNull();
   });
 });

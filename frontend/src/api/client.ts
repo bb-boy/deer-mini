@@ -59,6 +59,27 @@ export function getThread(threadId: string, userId: string): Promise<Thread> {
   );
 }
 
+export function renameThread(
+  threadId: string,
+  userId: string,
+  title: string,
+): Promise<Thread> {
+  return request<Thread>(
+    `/api/threads/${encodeURIComponent(threadId)}?${userQuery(userId).toString()}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    },
+  );
+}
+
+export function deleteThread(threadId: string, userId: string): Promise<void> {
+  return request<void>(
+    `/api/threads/${encodeURIComponent(threadId)}?${userQuery(userId).toString()}`,
+    { method: "DELETE" },
+  );
+}
+
 export function listRuns(threadId: string, userId: string): Promise<Run[]> {
   const query = userQuery(userId);
   query.set("limit", "50");

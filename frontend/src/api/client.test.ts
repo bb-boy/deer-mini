@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createRun, getLatestState, listThreads } from "./client";
+import {
+  createRun,
+  deleteThread,
+  getLatestState,
+  listThreads,
+  renameThread,
+} from "./client";
 
 
 afterEach(() => {
@@ -66,5 +72,31 @@ describe("API client", () => {
     );
 
     await expect(getLatestState("thread-1", "alice")).resolves.toBeNull();
+  });
+
+  it("uses the thread update and delete endpoints", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "thread-1", title: "新标题" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await renameThread("thread-1", "alice", "新标题");
+    await deleteThread("thread-1", "alice");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/threads/thread-1?user_id=alice",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ title: "新标题" }) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/threads/thread-1?user_id=alice",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });

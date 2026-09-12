@@ -168,23 +168,23 @@ export function useAgentRun({ userId, thread, onSettled }: UseAgentRunOptions) {
   }, [closeStream, currentRun, userId]);
 
   const clearTransient = useCallback(() => {
+    closeStream();
+    setCurrentRun(null);
+    setRunning(false);
     setPendingUserMessage(null);
     setLiveAssistantText("");
     setToolEvents([]);
     setError(null);
     setConnectionNotice(null);
-  }, []);
+  }, [closeStream]);
 
   useEffect(() => () => closeStream(), [closeStream]);
 
   useEffect(() => {
-    if (currentRun && thread && currentRun.thread_id !== thread.id) {
-      closeStream();
-      setCurrentRun(null);
-      setRunning(false);
+    if (currentRun && (!thread || currentRun.thread_id !== thread.id)) {
       clearTransient();
     }
-  }, [clearTransient, closeStream, currentRun, thread]);
+  }, [clearTransient, currentRun, thread]);
 
   return {
     currentRun,

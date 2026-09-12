@@ -4,9 +4,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    port: 5175,
     proxy: {
-      "/api": process.env.DEER_MINI_API_PROXY_TARGET || "http://127.0.0.1:8000",
+      "/api": process.env.DEER_MINI_API_PROXY_TARGET || "http://127.0.0.1:8005",
     },
   },
   test: {

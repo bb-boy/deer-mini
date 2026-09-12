@@ -4,7 +4,10 @@ import asyncio
 
 # 在这里编写 pytest 的 test_* 函数。
 
-from app.services.thread_service import ThreadService
+from app.services.thread_service import (
+    ThreadService,
+    cleanup_pending_thread_deletions,
+)
 
 
 
@@ -26,6 +29,11 @@ class FakeThreadRepository:
         if self.delete_error is not None:
             raise self.delete_error
         return self.get(thread_id, user_id)
+
+
+class MissingThreadRepository:
+    def get(self, thread_id: str, user_id: str) -> None:
+        return None
 
 
 def make_thread(tmp_path, monkeypatch) -> tuple[Thread, FakeThreadRepository]:
@@ -146,3 +154,26 @@ def test_delete_thread_keeps_cleanup_marker_when_rmtree_fails(
     assert deleted == thread
     assert not (tmp_path / "users" / "alice" / "threads" / "thread-1").exists()
     assert len(list((tmp_path / "users" / "alice" / "threads").glob(".deleting-*"))) == 1
+
+
+def test_startup_restores_marker_when_thread_still_exists(tmp_path, monkeypatch):
+    thread, repository = make_thread(tmp_path, monkeypatch)
+    thread_dir = tmp_path / "users" / "alice" / "threads" / "thread-1"
+    marker = thread_dir.parent / ".deleting-thread-1.operation-1"
+    thread_dir.replace(marker)
+
+    asyncio.run(cleanup_pending_thread_deletions(repository))
+
+    assert thread_dir.exists()
+    assert not marker.exists()
+
+
+def test_startup_removes_marker_when_thread_was_deleted(tmp_path, monkeypatch):
+    thread, _ = make_thread(tmp_path, monkeypatch)
+    thread_dir = tmp_path / "users" / "alice" / "threads" / thread.id
+    marker = thread_dir.parent / f".deleting-{thread.id}.operation-1"
+    thread_dir.replace(marker)
+
+    asyncio.run(cleanup_pending_thread_deletions(MissingThreadRepository()))
+
+    assert not marker.exists()

@@ -14,6 +14,7 @@ from app.repositories.thread_repository import ThreadRepository
 
 
 logger = logging.getLogger(__name__)
+_DELETING_PREFIX = ".deleting-"
 
 #一个用户目录
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data" / "users" # resolve()返回绝对路径，parents[2]返回到第三个父目录。__file__是当前文件的路径，PATH把她变为一个PATH对象方便操作，
@@ -105,7 +106,9 @@ class ThreadService:
 
         # 先在同一文件系统内原子改名：数据库删除失败时可以把目录恢复；
         # 数据库删除成功后，外部请求也不会再看到半删除的 Workspace。
-        deleting_dir = thread_root / f".deleting-{thread_id}-{new_id()}"
+        # Thread ID 由 new_id() 生成，不包含句点；句点用于让启动恢复可靠地
+        # 从右侧分开 Thread ID 与本次删除操作 ID。
+        deleting_dir = thread_root / f"{_DELETING_PREFIX}{thread_id}.{new_id()}"
         if thread_dir.exists():
             thread_dir.replace(deleting_dir)
         try:
@@ -141,17 +144,46 @@ class ThreadService:
             raise ValueError(f"{field_name} 不能包含路径分隔符或 '..'")
 
 
-async def cleanup_pending_thread_deletions() -> None:
-    """应用启动时重试上一次未完成的 Thread 目录清理。"""
+async def cleanup_pending_thread_deletions(
+    threadrepo: ThreadRepository | None = None,
+) -> None:
+    """恢复中断的删除操作：有数据库记录就还原，否则清理目录。"""
     data_root = resolve_data_root()
     if not data_root.exists():
         return
+    repository = threadrepo or ThreadRepository()
     pending = [
         path
-        for path in data_root.glob("*/threads/.deleting-*")
+        for path in data_root.glob(f"*/threads/{_DELETING_PREFIX}*")
         if path.is_dir() and not path.is_symlink()
     ]
     for path in pending:
+        payload = path.name.removeprefix(_DELETING_PREFIX)
+        thread_id, separator, operation_id = payload.rpartition(".")
+        if not separator or not thread_id or not operation_id:
+            # 旧版或损坏的标记无法安全对应数据库记录，宁可保留也不能误删。
+            logger.warning("跳过无法识别的 Thread 删除标记：%s", path)
+            continue
+        user_id = path.parent.parent.name
+        try:
+            existing = repository.get(thread_id, user_id)
+        except Exception:
+            logger.exception("无法确认删除标记对应的 Thread，暂时保留：%s", path)
+            continue
+
+        if existing is not None:
+            expected_dir = path.parent / thread_id
+            recorded_dir = Path(existing.workspace_path).parent
+            if recorded_dir.resolve() != expected_dir.resolve():
+                logger.error("Thread 记录的 Workspace 与删除标记不匹配：%s", path)
+                continue
+            if expected_dir.exists():
+                logger.error("Thread 原目录与删除标记同时存在，暂不处理：%s", path)
+                continue
+            path.replace(expected_dir)
+            logger.warning("已恢复中断删除的 Thread 目录：%s", expected_dir)
+            continue
+
         try:
             await asyncio.to_thread(shutil.rmtree, path)
         except OSError:

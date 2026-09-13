@@ -1,0 +1,50 @@
+/* 生成 Streamdown 配套样式，不引入会重置现有页面的 Preflight。 */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "streamdown/styles.css";
+@import "katex/dist/katex.min.css";
+
+/* 只为配套控件补齐按钮基础样式，避免浏览器默认的白底边框。 */
+@layer base {
+  :where(.markdown-content, .reply-process, .reasoning, [data-streamdown][role="dialog"]) button {
+    appearance: none;
+    color: inherit;
+    font: inherit;
+    background: transparent;
+    border: 0 solid;
+  }
+}
+
+@source "../components/MarkdownContent.tsx";
+@source "../components/MarkdownLink.tsx";
+@source "../components/ai-elements";
+@source "../components/ui";
+@source "../components/AssistantProcess.tsx";
+@source "../components/ReasoningBlock.tsx";
+@source "./components.tsx";
+@source "../../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@streamdown/code/dist/*.js";
+@source "../../node_modules/@streamdown/mermaid/dist/*.js";
+
+@custom-variant dark (&:where(.theme-dark, .theme-dark *, :root:has(.app-shell.theme-dark) *));
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--background);
+  --color-secondary: var(--muted);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--foreground);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--gold);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+}

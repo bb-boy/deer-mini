@@ -252,11 +252,11 @@ export function ThreadSidebar({
       <div className="sidebar-header">
         <div className="brand-block">
           <span className="brand-mark" aria-hidden="true">
-            <span>DF</span>
+            <span>DM</span>
           </span>
           {!collapsed && (
             <div className="brand-copy">
-              <strong>DeerFlow</strong>
+              <strong>DeerMini</strong>
               <span>Agent workspace</span>
             </div>
           )}

@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { Icon } from "./Icon";
+import type { ModelProfile } from "../api/types";
 
 export interface SendMessageInput {
   message: string;
@@ -20,6 +21,8 @@ export interface SendMessageInput {
 }
 
 interface ChatComposerProps {
+  models: ModelProfile[];
+  defaultModelName: string;
   disabled: boolean;
   running: boolean;
   onSend: (input: SendMessageInput) => Promise<void> | void;
@@ -39,7 +42,7 @@ interface ChatComposerProps {
 const COMMANDS = [
   { name: "/clear", description: "清空当前显示，不删除历史记录" },
   { name: "/new", description: "开始一段新的对话" },
-  { name: "/help", description: "查看 Deer Mini 的使用提示" },
+  { name: "/help", description: "查看 DeerMini 的使用提示" },
 ];
 
 function readDraft(key?: string): string {
@@ -66,7 +69,6 @@ function readPreference(
   return value && (!allowed || allowed.includes(value)) ? value : fallback;
 }
 
-const MODEL_NAMES = ["ustc-deepseek-flash", "ustc-deepseek-pro"] as const;
 const REASONING_EFFORTS = ["low", "medium", "high"] as const;
 
 function isComposing(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
@@ -74,6 +76,8 @@ function isComposing(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
 }
 
 export function ChatComposer({
+  models,
+  defaultModelName,
   disabled,
   running,
   onSend,
@@ -90,9 +94,13 @@ export function ChatComposer({
   onHelp,
 }: ChatComposerProps) {
   const [message, setMessage] = useState("");
-  const [modelName, setModelName] = useState(() =>
-    readPreference("deer-mini-model", "ustc-deepseek-flash", MODEL_NAMES),
+  // 空值代表跟随后端默认；旧版本自动保存的 USTC 选择不再覆盖新的后台配置。
+  const [modelChoice, setModelChoice] = useState(() =>
+    readPreference("deer-mini-model-choice", ""),
   );
+  const defaultModel = models.find((model) => model.name === defaultModelName);
+  const selectedModel = models.find((model) => model.name === modelChoice) ?? defaultModel;
+  const modelName = selectedModel?.name ?? "";
   const [thinkingEnabled, setThinkingEnabled] = useState(
     () => readPreference("deer-mini-thinking", "false") === "true",
   );
@@ -108,6 +116,13 @@ export function ChatComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const latestDraftRef = useRef({ key: draftKey, value: "" });
   const hydratedDraftKeyRef = useRef<string | undefined>(undefined);
+  const useThinking = thinkingEnabled && Boolean(selectedModel?.supports_thinking);
+
+  useEffect(() => {
+    if (models.length > 0 && modelChoice && !models.some((model) => model.name === modelChoice)) {
+      setModelChoice("");
+    }
+  }, [modelChoice, models]);
 
   function writeMessage(value: string) {
     latestDraftRef.current = { key: draftKey, value };
@@ -156,16 +171,17 @@ export function ChatComposer({
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem("deer-mini-model", modelName);
+    window.localStorage.setItem("deer-mini-model-choice", modelChoice);
     window.localStorage.setItem("deer-mini-thinking", String(thinkingEnabled));
     window.localStorage.setItem("deer-mini-effort", reasoningEffort);
-  }, [modelName, reasoningEffort, thinkingEnabled]);
+  }, [modelChoice, reasoningEffort, thinkingEnabled]);
 
   useEffect(() => {
     const element = textareaRef.current;
     if (!element) return;
     element.style.height = "auto";
-    element.style.height = `${Math.min(Math.max(element.scrollHeight, 70), 180)}px`;
+    // 短消息保持紧凑，多行内容自动长高，达到上限后在输入框内滚动。
+    element.style.height = `${Math.min(Math.max(element.scrollHeight, 44), 180)}px`;
   }, [message]);
 
   const normalizedHistory = useMemo(() => {
@@ -184,11 +200,11 @@ export function ChatComposer({
     ? COMMANDS.filter((command) => command.name.startsWith(commandQuery))
     : [];
   const showCommandMenu = focused && commandOptions.length > 0;
-  const activeMode = !thinkingEnabled
+  const activeMode = !useThinking
     ? "快速"
-    : modelName.includes("pro")
-      ? "专业"
-      : "思考";
+    : !selectedModel?.supports_reasoning_effort || reasoningEffort === "low"
+      ? "思考"
+      : reasoningEffort === "high" ? "极致" : "专业";
 
   function chooseCommand(name: string) {
     if (name === "/clear") {
@@ -203,17 +219,13 @@ export function ChatComposer({
   }
 
   function selectMode(mode: "flash" | "thinking" | "pro" | "ultra", event: MouseEvent<HTMLButtonElement>) {
-    if (running) return;
+    if (running || !selectedModel || (mode !== "flash" && !selectedModel.supports_thinking)) return;
+    // 运行模式只改变当前模型的思考方式，不能悄悄切换模型或服务商。
     if (mode === "flash") {
       setThinkingEnabled(false);
-      setModelName("ustc-deepseek-flash");
-    } else if (mode === "thinking") {
-      setThinkingEnabled(true);
-      setModelName("ustc-deepseek-flash");
     } else {
       setThinkingEnabled(true);
-      setModelName("ustc-deepseek-pro");
-      setReasoningEffort(mode === "ultra" ? "high" : "medium");
+      setReasoningEffort(mode === "ultra" ? "high" : mode === "thinking" ? "low" : "medium");
     }
     event.currentTarget.closest("details")?.removeAttribute("open");
   }
@@ -301,14 +313,15 @@ export function ChatComposer({
       saveDraft(draftKey, "");
       return;
     }
+    if (!modelName) return;
 
     setSubmitting(true);
     try {
       await onSend({
         message: trimmedMessage,
         modelName,
-        thinkingEnabled,
-        reasoningEffort: thinkingEnabled ? reasoningEffort : null,
+        thinkingEnabled: useThinking,
+        reasoningEffort: useThinking && selectedModel?.supports_reasoning_effort ? reasoningEffort : null,
       });
       writeMessage("");
       setHistoryIndex(null);
@@ -338,7 +351,7 @@ export function ChatComposer({
     }
   }
 
-  const sendDisabled = disabled || submitting || running || !message.trim();
+  const sendDisabled = disabled || submitting || running || !message.trim() || !modelName;
   return (
     <form className={`composer ${dragging ? "is-dragging" : ""}`} onSubmit={submit}>
       <div
@@ -373,18 +386,11 @@ export function ChatComposer({
             ))}
           </div>
         )}
-        <div className="composer-topline">
-          <span className="composer-context">
-            <span className="composer-context-icon"><Icon name="sparkles" size={14} /></span>
-            Deer Mini
-          </span>
-          <span className="composer-hint">Enter 发送 · Shift + Enter 换行</span>
-        </div>
         <textarea
           ref={textareaRef}
           aria-label="给 Agent 的消息"
           aria-describedby="composer-hint"
-          placeholder={disabled ? "请先新建或选择一个对话" : "描述一个任务，让 Deer Mini 帮你完成…"}
+          placeholder={disabled ? "请先新建或选择一个对话" : "描述一个任务，让 DeerMini 帮你完成…"}
           value={message}
           disabled={disabled || running}
           onChange={(event) => {
@@ -402,7 +408,7 @@ export function ChatComposer({
           }}
           onFocus={() => setFocused(true)}
           onBlur={() => window.setTimeout(() => setFocused(false), 120)}
-          rows={3}
+          rows={1}
         />
         {showCommandMenu && (
           <div className="command-menu" role="listbox" aria-label="命令建议">
@@ -444,12 +450,15 @@ export function ChatComposer({
               <span>模型</span>
               <select
                 aria-label="模型"
-                value={modelName}
-                disabled={running}
-                onChange={(event) => setModelName(event.target.value)}
+                value={modelName === defaultModelName ? "" : modelName}
+                disabled={running || models.length === 0}
+                onChange={(event) => setModelChoice(event.target.value)}
               >
-                <option value="ustc-deepseek-flash">DeepSeek Flash</option>
-                <option value="ustc-deepseek-pro">DeepSeek V4 Pro</option>
+                <option value="">{defaultModel ? `默认 · ${defaultModel.display_name}` : "等待模型配置"}</option>
+                {/* 默认模型已经显示在第一项，按唯一名称排除它，避免重复。 */}
+                {models.filter((model) => model.name !== defaultModelName).map((model) => (
+                  <option key={model.name} value={model.name}>{model.display_name}</option>
+                ))}
               </select>
               <Icon name="chevron-down" size={13} />
             </label>
@@ -463,7 +472,8 @@ export function ChatComposer({
                 <button
                   type="button"
                   role="option"
-                  aria-selected={!thinkingEnabled}
+                  aria-selected={!useThinking}
+                  disabled={running || !selectedModel}
                   onClick={(event) => selectMode("flash", event)}
                 >
                   <strong>快速</strong><small>快速回答，适合简单任务</small>
@@ -471,23 +481,26 @@ export function ChatComposer({
                 <button
                   type="button"
                   role="option"
-                  aria-selected={thinkingEnabled && !modelName.includes("pro")}
+                  aria-selected={useThinking && (!selectedModel?.supports_reasoning_effort || reasoningEffort === "low")}
+                  disabled={running || !selectedModel?.supports_thinking}
                   onClick={(event) => selectMode("thinking", event)}
                 >
-                  <strong>思考</strong><small>逐步推理，平衡速度与深度</small>
+                  <strong>思考</strong><small>开启推理，兼顾回答速度</small>
                 </button>
                 <button
                   type="button"
                   role="option"
-                  aria-selected={thinkingEnabled && modelName.includes("pro") && reasoningEffort !== "high"}
+                  aria-selected={useThinking && selectedModel?.supports_reasoning_effort && reasoningEffort === "medium"}
+                  disabled={running || !selectedModel?.supports_thinking || !selectedModel.supports_reasoning_effort}
                   onClick={(event) => selectMode("pro", event)}
                 >
-                  <strong>专业</strong><small>更强模型，适合复杂工作流</small>
+                  <strong>专业</strong><small>中等推理强度，适合多步骤任务</small>
                 </button>
                 <button
                   type="button"
                   role="option"
-                  aria-selected={thinkingEnabled && modelName.includes("pro") && reasoningEffort === "high"}
+                  aria-selected={useThinking && selectedModel?.supports_reasoning_effort && reasoningEffort === "high"}
+                  disabled={running || !selectedModel?.supports_thinking || !selectedModel.supports_reasoning_effort}
                   onClick={(event) => selectMode("ultra", event)}
                 >
                   <strong className="gold-text">极致</strong><small>最高推理强度，适合长任务</small>
@@ -498,13 +511,13 @@ export function ChatComposer({
               <input
                 type="checkbox"
                 aria-label="开启思考"
-                checked={thinkingEnabled}
-                disabled={running}
+                checked={useThinking}
+                disabled={running || !selectedModel?.supports_thinking}
                 onChange={(event) => setThinkingEnabled(event.target.checked)}
               />
               开启思考
             </label>
-            {thinkingEnabled && (
+            {useThinking && selectedModel?.supports_reasoning_effort && (
               <label className="composer-select effort-select">
                 <span>推理强度</span>
                 <select
@@ -540,7 +553,7 @@ export function ChatComposer({
         </div>
       </div>
       <p id="composer-hint" className="composer-footnote">
-        Deer Mini 会在独立 Workspace 中读取文件并执行必要的工具步骤。
+        DeerMini 会在独立 Workspace 中读取文件并执行必要的工具步骤。
       </p>
     </form>
   );

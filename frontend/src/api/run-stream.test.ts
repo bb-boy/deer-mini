@@ -24,10 +24,10 @@ class FakeEventSource {
     this.closed = true;
   }
 
-  emit(name: string, event: RunEvent) {
+  emit(name: string, event: unknown, cursor?: string) {
     const message = new MessageEvent(name, {
       data: JSON.stringify(event),
-      lastEventId: event.id,
+      lastEventId: cursor ?? (event as { id?: string }).id ?? "",
     });
     for (const listener of this.listeners.get(name) ?? []) listener(message);
   }
@@ -40,6 +40,34 @@ afterEach(() => {
 });
 
 describe("openRunStream", () => {
+  it("deduplicates by live cursor and accepts unsaved event payloads", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const onEvent = vi.fn();
+    const onReset = vi.fn();
+    openRunStream({ threadId: "t", runId: "r", userId: "alice", onEvent, onReset,
+      onTerminal: vi.fn(), onConnectionError: vi.fn() });
+    const source = FakeEventSource.latest!;
+    const event = { id: "payload-id", run_id: "r", thread_id: "t", event_type: "text.delta", sequence: null, payload: { text: "字" } };
+    source.emit("run_event", event, "s:epoch:1");
+    source.emit("run_event", event, "s:epoch:1");
+    source.emit("run_event", { ...event, id: "next" }, "s:epoch:2");
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    source.emit("stream.reset", { run_id: "r", thread_id: "t", checkpoint: null, reason: "stream_lost" });
+    expect(onReset).toHaveBeenCalledWith(null, "stream_lost");
+  });
+
+  it("reports an unconfirmed result without firing the terminal callback", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const onTerminal = vi.fn();
+    const onUnconfirmed = vi.fn();
+    openRunStream({ threadId: "t", runId: "r", userId: "alice", onEvent: vi.fn(),
+      onTerminal, onUnconfirmed, onConnectionError: vi.fn() });
+    FakeEventSource.latest!.emit("stream.unconfirmed", { message: "结果尚未确认" });
+    expect(onUnconfirmed).toHaveBeenCalledWith("结果尚未确认");
+    expect(onTerminal).not.toHaveBeenCalled();
+    expect(FakeEventSource.latest!.closed).toBe(true);
+  });
+
   it("encodes ids, deduplicates replay, and closes on a terminal event", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     const onEvent = vi.fn();

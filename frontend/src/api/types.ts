@@ -9,6 +9,18 @@ export type RunStatus =
 
 export type MessageRole = "user" | "assistant" | "system" | "tool";
 
+export interface ModelProfile {
+  name: string;
+  display_name: string;
+  supports_thinking: boolean;
+  supports_reasoning_effort: boolean;
+}
+
+export interface ModelsResponse {
+  default_model: string;
+  models: ModelProfile[];
+}
+
 export interface Thread {
   id: string;
   user_id: string;
@@ -76,6 +88,8 @@ export interface WorkspaceFile {
 export type RunEventType =
   | "run.start"
   | "text.delta"
+  | "reasoning.delta"
+  | "message.complete"
   | "tool.start"
   | "tool.end"
   | "run.end"

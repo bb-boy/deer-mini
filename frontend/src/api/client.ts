@@ -1,4 +1,4 @@
-import type { Checkpoint, Run, Thread, WorkspaceFile } from "./types";
+import type { Checkpoint, ModelsResponse, Run, Thread, WorkspaceFile } from "./types";
 
 
 export class ApiError extends Error {
@@ -34,6 +34,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function userQuery(userId: string): URLSearchParams {
   return new URLSearchParams({ user_id: userId });
+}
+
+export function getModels(): Promise<ModelsResponse> {
+  return request<ModelsResponse>("/api/models");
 }
 
 export function listThreads(

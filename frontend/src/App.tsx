@@ -9,6 +9,7 @@ import {
 import {
   createThread,
   getLatestState,
+  getModels,
   listRuns,
   listThreads,
   listWorkspaceFiles,
@@ -17,7 +18,7 @@ import {
   uploadWorkspaceFile,
   workspaceFileDownloadUrl,
 } from "./api/client";
-import type { Message, Run, Thread, WorkspaceFile } from "./api/types";
+import type { Checkpoint, Message, ModelsResponse, Run, Thread, WorkspaceFile } from "./api/types";
 import { ChatComposer, type SendMessageInput } from "./components/ChatComposer";
 import { ContextPanel, type ContextTab } from "./components/ContextPanel";
 import { Icon } from "./components/Icon";
@@ -63,6 +64,8 @@ export default function App() {
   const [loadingThreads, setLoadingThreads] = useState(true);
   const [loadingThread, setLoadingThread] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [modelCatalog, setModelCatalog] = useState<ModelsResponse | null>(null);
+  const [modelError, setModelError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readInitialSidebarCollapsed);
   const [contextPanelOpen, setContextPanelOpen] = useState(() =>
@@ -85,6 +88,34 @@ export default function App() {
   const newChatRequestedRef = useRef(false);
   const userRequestGenerationRef = useRef(0);
   const threadRequestGenerationRef = useRef(0);
+  const messageRequestGenerationRef = useRef(0);
+  useEffect(() => {
+    let cancelled = false;
+    let generation = 0;
+    const refreshModels = () => {
+      const requestGeneration = ++generation;
+      getModels().then((catalog) => {
+        if (!cancelled && requestGeneration === generation) {
+          setModelCatalog(catalog);
+          setModelError(null);
+        }
+      }).catch((error) => {
+        if (!cancelled && requestGeneration === generation) {
+          setModelError(error instanceof Error ? `加载模型配置失败：${error.message}` : "加载模型配置失败");
+        }
+      });
+    };
+    refreshModels();
+    // 后台重启后切回浏览器，自动读取最新模型配置。
+    window.addEventListener("focus", refreshModels);
+    const handleVisibilityChange = () => { if (!document.hidden) refreshModels(); };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshModels);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
   useEffect(() => {
     window.localStorage.setItem("deer-mini-sidebar-collapsed", String(sidebarCollapsed));
   }, [sidebarCollapsed]);
@@ -162,6 +193,7 @@ export default function App() {
     async (threadId: string) => {
       const generation = userRequestGenerationRef.current;
       const threadGeneration = ++threadRequestGenerationRef.current;
+      const messageGeneration = ++messageRequestGenerationRef.current;
       const [checkpoint, nextRuns, nextFiles] = await Promise.all([
         getLatestState(threadId, userId),
         listRuns(threadId, userId),
@@ -173,7 +205,10 @@ export default function App() {
       ) {
         return [];
       }
-      setMessages(checkpoint?.state.messages ?? []);
+      // 新快照可能先于旧 HTTP 刷新抵达；旧消息不能覆盖新一轮的消息。
+      if (messageGeneration === messageRequestGenerationRef.current) {
+        setMessages(checkpoint?.state.messages ?? []);
+      }
       setRuns(nextRuns);
       setFiles(nextFiles);
       return nextRuns;
@@ -186,11 +221,19 @@ export default function App() {
         await Promise.all([refreshThreads(), loadThreadData(threadId)]);
       } catch (error) {
         setPageError(error instanceof Error ? error.message : "刷新运行结果失败");
+        throw error;
       }
     },
     [loadThreadData, refreshThreads],
   );
-  const agentRun = useAgentRun({ userId, thread: selectedThread, onSettled: handleSettled });
+  const handleSnapshot = useCallback((threadId: string, checkpoint: Checkpoint | null) => {
+    if (threadId !== selectedThreadId) return;
+    messageRequestGenerationRef.current += 1;
+    setMessages(checkpoint?.state.messages ?? []);
+  }, [selectedThreadId]);
+  const agentRun = useAgentRun({
+    userId, thread: selectedThread, onSettled: handleSettled, onSnapshot: handleSnapshot,
+  });
   useEffect(() => {
     let cancelled = false;
     setLoadingThreads(true);
@@ -404,10 +447,10 @@ export default function App() {
     const payload = format === "json"
       ? JSON.stringify({ thread, checkpoint }, null, 2)
       : [
-          `# ${thread.title || "Deer Mini 对话"}`,
+          `# ${thread.title || "DeerMini 对话"}`,
           "",
           ...checkpoint.state.messages.flatMap((message) => [
-            `## ${message.role === "user" ? "你" : message.role === "assistant" ? "Deer Mini" : message.role}`,
+            `## ${message.role === "user" ? "你" : message.role === "assistant" ? "DeerMini" : message.role}`,
             "",
             message.content,
             "",
@@ -466,6 +509,7 @@ export default function App() {
   }
   async function handleSend(input: SendMessageInput) {
     setPageError(null);
+    messageRequestGenerationRef.current += 1;
     try {
       let targetThread = selectedThread;
       if (!targetThread) {
@@ -528,7 +572,7 @@ export default function App() {
       setUploading(false);
     }
   }
-  const visibleError = pageError || agentRun.error;
+  const visibleError = pageError || agentRun.error || modelError;
   return (
     <div
       className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""} ${
@@ -628,13 +672,19 @@ export default function App() {
             <MessageList
               messages={messages}
               pendingUserMessage={agentRun.pendingUserMessage ?? undefined}
-              liveAssistantText={agentRun.liveAssistantText}
+              liveMessages={agentRun.liveMessages}
+              toolEvents={agentRun.toolEvents}
+              running={agentRun.running}
+              streamingMessageId={agentRun.streamingMessageId}
+              reasoningMessageId={agentRun.reasoningMessageId}
               onSuggestion={setSuggestedPrompt}
               onCopy={copyMessage}
             />
           </div>
         </div>
         <ChatComposer
+          models={modelCatalog?.models ?? []}
+          defaultModelName={modelCatalog?.default_model ?? ""}
           disabled={loadingThreads || uploading}
           running={agentRun.running}
           onSend={handleSend}

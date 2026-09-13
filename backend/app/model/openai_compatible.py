@@ -30,7 +30,7 @@ from app.domain.tools import ToolDefinition
 from app.model.base import TextDeltaHandler
 from dataclasses import dataclass, field
 from app.model.config import get_model_profile,ModelProfile
-
+from langsmith.wrappers import wrap_openai
 
 
 
@@ -75,10 +75,14 @@ class OpenAICompatibleModel:
 
 
 
-        self._client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
+        # 保留原来的模型服务地址，并为后续调用添加 LangSmith 追踪。
+        self._client = wrap_openai(
+
+                AsyncOpenAI(
+                            api_key=api_key,
+                            base_url=base_url,
+               )
+)
 
 
 
@@ -188,7 +192,8 @@ class OpenAICompatibleModel:
         tools: list[ToolDefinition],
         thinking_enabled: bool = False,
         reasoning_effort: str | None = None,
-        on_text_delta: TextDeltaHandler | None = None) -> Message:
+        on_text_delta: TextDeltaHandler | None = None,
+        on_reasoning_delta: TextDeltaHandler | None = None) -> Message:
 
 
         """
@@ -200,6 +205,7 @@ class OpenAICompatibleModel:
         - thinking_enabled：是否开启思考模式；
         - reasoning_effort：思考强度；
         - on_text_delta：每收到一小段文字时调用的异步函数。
+        - on_reasoning_delta：每收到一小段模型思考时调用；完整思考仍保存在返回的 Message 中。
         输出
         返回完整的：
         Message(role="assistant", ...)
@@ -426,6 +432,9 @@ class OpenAICompatibleModel:
             #如果reasoning_delta不为None，就把它加入reasoning_parts，并调用on_reasoning_delta
             if reasoning_delta is not None:
                 reasoning_parts.append(reasoning_delta)
+                # 和正文一样立即发送；不必等整轮模型回复完成才显示思考。
+                if reasoning_delta and on_reasoning_delta is not None:
+                    await on_reasoning_delta(reasoning_delta)
 
 
 

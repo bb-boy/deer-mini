@@ -238,11 +238,22 @@ class DockerCommandRunner:
             "LANG=C.UTF-8",
             "--env",
             "PYTHONUNBUFFERED=1",
+        ]
+        # 容器共用宿主机时钟；只读共享时区文件，让 date 等程序也按宿主机时区显示。
+        # TZ 指向该文件，避免镜像自带的 UTC 设置覆盖宿主机配置。
+        if Path("/etc/localtime").is_file():
+            args.extend([
+                "--mount",
+                "type=bind,source=/etc/localtime,target=/etc/localtime,readonly",
+                "--env",
+                "TZ=:/etc/localtime",
+            ])
+        args.extend([
             self.config.image,
             "/bin/bash",
             "-lc",
             command,
-        ]
+        ])
         return container_name, args
 
     async def run(

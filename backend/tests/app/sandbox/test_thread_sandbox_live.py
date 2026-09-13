@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import replace
 import os
 from pathlib import Path
+import subprocess
+import time
 from uuid import uuid4
 
 import pytest
@@ -42,6 +44,54 @@ async def finish(manager, context):
 
 async def execute(manager, context, command):
     return await manager.run(**context, command=command, tool_call_id="call-test")
+
+
+def test_real_bash_inherits_host_clock_and_timezone(tmp_path):
+    if not Path("/etc/localtime").is_file():
+        pytest.skip("当前宿主机没有 /etc/localtime 时区文件")
+    host_timezone = subprocess.check_output(
+        ["date", "+%z %Z"], text=True,
+        env={**os.environ, "TZ": ":/etc/localtime"},
+    ).strip()
+    command = "date '+%s %z %Z'; date -u '+%z %Z'"
+
+    def check_result(result, started):
+        assert result.exit_code == 0
+        local, utc = result.output.strip().splitlines()
+        epoch, timezone = local.split(" ", 1)
+        assert int(started) <= int(epoch) <= int(time.time())
+        assert timezone == host_timezone
+        assert utc == "+0000 UTC"
+
+    async def scenario():
+        runner = DockerCommandRunner()
+        started = time.time()
+        check_result(await runner.run(
+            command=command, workspace_path=str(tmp_path),
+            run_id="timezone-direct", tool_call_id="time-check",
+        ), started)
+
+        # 同一 Thread 的下一轮继续复用容器，也必须保持相同的时区和系统时钟。
+        manager = ThreadSandboxManager(runner, scope=uuid4().hex)
+        container_ids = []
+        try:
+            for run_id in ("timezone-1", "timezone-2"):
+                context = ctx(tmp_path, run=run_id)
+                await manager.begin_run(**context)
+                started = time.time()
+                check_result(await execute(manager, context, command), started)
+                container_ids.append(manager._active[(context["user_id"], context["thread_id"])].container_id)
+                await finish(manager, context)
+            assert container_ids[0] == container_ids[1]
+            mounts = subprocess.check_output(
+                ["docker", "inspect", "--format", "{{range .Mounts}}{{if eq .Destination \"/etc/localtime\"}}{{.RW}}{{end}}{{end}}", container_ids[0]],
+                text=True,
+            ).strip()
+            assert mounts == "false"
+        finally:
+            await manager.close()
+
+    asyncio.run(scenario())
 
 
 def test_real_reuse_isolation_recycling_and_persistent_workspace(tmp_path):

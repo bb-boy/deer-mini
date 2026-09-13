@@ -108,11 +108,13 @@ def test_build_run_args_confines_command_to_current_workspace(tmp_path: Path):
         for index, value in enumerate(args)
         if value == "--env"
     ]
-    assert injected_env == [
+    assert injected_env[:3] == [
         "HOME=/workspace",
         "LANG=C.UTF-8",
         "PYTHONUNBUFFERED=1",
     ]
+    # 除固定环境外只允许时区设置，不能把后端的 Key 等环境变量传入容器。
+    assert set(injected_env[3:]) <= {"TZ=:/etc/localtime"}
 
 
 def test_run_captures_nonzero_exit_code(tmp_path: Path, monkeypatch):

@@ -50,7 +50,7 @@ class ModelProfile:
     replay_reasoning_content: bool = False
 
 
-DEFAULT_MODEL_NAME = "ustc-deepseek-flash"
+DEFAULT_MODEL_NAME = "siliconflow-deepseek-flash"
 
 
 MODEL_PROFILES: dict[str, ModelProfile] = {
@@ -69,7 +69,7 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
 
     "ustc-deepseek-pro": ModelProfile(
         name="ustc-deepseek-pro",
-        display_name="USTC DeepSeek V4 Pro",
+        display_name="USTCDeepSeek V4 Pro",
         provider="openai_compatible",
         model_id="deepseek-v4-pro",
         api_key_env="USTC_LLM_API_KEY",
@@ -79,6 +79,19 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         thinking_format="deepseek",
         replay_reasoning_content=True,
     ),
+
+    "siliconflow-deepseek-flash": ModelProfile(
+            name="siliconflow-deepseek-flash",
+            display_name="SILICONFLOW DeepSeek V4 Flash",
+            provider="openai_compatible",
+            model_id="deepseek-ai/DeepSeek-V4-Flash",
+            api_key_env="SILICONFLOW_LLM_API_KEY",
+            base_url_env="SILICONFLOW_LLM_BASE_URL",
+            supports_thinking=True,
+            supports_reasoning_effort=True,
+            thinking_format="deepseek",
+            replay_reasoning_content=True,
+        ),
 }
 
 

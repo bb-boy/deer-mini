@@ -10,12 +10,15 @@ from app.api.schemas import (
     CheckpointResponse,
     CreateRunRequest,
     CreateThreadRequest,
+    ModelProfileResponse,
+    ModelsResponse,
     UpdateThreadRequest,
     RunResponse,
     ThreadResponse,
     WorkspaceFileResponse,
 )
 from app.domain.events import RunEvent
+from app.model.config import DEFAULT_MODEL_NAME, MODEL_PROFILES
 from app.repositories.checkpoint_repository import CheckpointRepository
 from app.repositories.events_repository import EventRepository
 from app.repositories.run_repository import RunRepository
@@ -31,6 +34,15 @@ from app.services.workspace_file_service import (
 
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/models", response_model=ModelsResponse)
+def list_models() -> ModelsResponse:
+    """前端直接使用后端的配置名和默认模型，避免两边各自写一份列表。"""
+    return ModelsResponse(
+        default_model=DEFAULT_MODEL_NAME,
+        models=[ModelProfileResponse.model_validate(profile) for profile in MODEL_PROFILES.values()],
+    )
 
 
 def _coordinator(request: Request) -> RunCoordinator:

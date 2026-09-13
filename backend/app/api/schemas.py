@@ -10,6 +10,22 @@ from app.domain.threads import ThreadStatus
 from app.model.config import DEFAULT_MODEL_NAME
 
 
+class ModelProfileResponse(BaseModel):
+    """供输入框选择的模型信息，不包含密钥和连接地址。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    display_name: str
+    supports_thinking: bool
+    supports_reasoning_effort: bool
+
+
+class ModelsResponse(BaseModel):
+    default_model: str
+    models: list[ModelProfileResponse]
+
+
 class CreateThreadRequest(BaseModel):
     """创建一段新对话所需的用户信息。"""
 

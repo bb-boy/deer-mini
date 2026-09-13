@@ -10,6 +10,7 @@ from app.model.base import ChatModel
 from app.runtime.context import RuntimeContext
 from app.tools.executor import ToolExecutor
 from app.tools.registry import ToolRegistry
+from app.domain.messages import Message
 
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ class LeadAgent:
         tool_registry: ToolRegistry,
         tool_executor: ToolExecutor,
         *,
+        system_prompt: str = "",
         thinking_enabled: bool = False,
         reasoning_effort: str | None = None,
         max_tool_rounds: int = 8,
@@ -35,17 +37,49 @@ class LeadAgent:
         - tool_registry：提供给模型的可用工具说明书。
         - tool_executor：统一执行模型选择的工具。
         - max_tool_rounds：最多允许模型连续要求多少轮工具。
+        - system_prompt: 系统提示，用于指导模型的行为。
         """
         if max_tool_rounds < 1:
             raise ValueError("max_tool_rounds 必须至少为 1")
 
         self._model = model
+        self._system_prompt = system_prompt
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
         self._thinking_enabled = thinking_enabled
         self._reasoning_effort = reasoning_effort
         self._max_tool_rounds = max_tool_rounds
         self._middleware = MiddlewareManager(middlewares)
+
+
+    def _build_model_messages(
+        self,
+        messages: list[Message],
+    ) -> list[Message]:
+        """整理本次模型请求，保留持久化历史的原始结构。"""
+        system_parts = []
+        conversation_messages = []
+
+        if self._system_prompt:
+            system_parts.append(self._system_prompt)
+
+        for message in messages:
+            if message.role == "system":
+                # 收集已有的工作目录等系统上下文。
+                system_parts.append(message.content)
+            else:
+                # 用户、模型、工具消息保持原来的顺序和角色。
+                conversation_messages.append(message)
+
+        if not system_parts:
+            return conversation_messages
+
+        system_message = Message(
+            role="system",
+            content="\n\n".join(system_parts),
+        )
+
+        return [system_message, *conversation_messages]
 
     async def run(
         self,
@@ -101,7 +135,7 @@ class LeadAgent:
 
             await self._middleware.before_model(state, context)
             assistant_message = await self._model.chat(
-                messages=state.messages,
+                messages=self._build_model_messages(state.messages),
                 tools=self._tool_registry.definitions(),
                 thinking_enabled=self._thinking_enabled,
                 reasoning_effort=self._reasoning_effort,

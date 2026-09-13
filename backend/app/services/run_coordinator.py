@@ -6,6 +6,7 @@ import math
 import os
 from typing import cast
 
+from app.agents.prompts.builder import apply_prompt_template
 from app.agents.lead_agent import LeadAgent
 from app.agents.workspace_context_middleware import WorkspaceContextMiddleware
 from app.domain.runs import Run
@@ -124,12 +125,14 @@ class RunCoordinator:
 
         try:
             registry = self._build_tool_registry()
+            system_prompt = await asyncio.to_thread(apply_prompt_template)
             agent = LeadAgent(
                 model=model,
                 tool_registry=registry,
                 tool_executor=ToolExecutor(registry),
                 thinking_enabled=thinking_enabled,
                 reasoning_effort=reasoning_effort,
+                system_prompt=system_prompt,
                 middlewares=[WorkspaceContextMiddleware(registry)],
             )
             run = self._run_service.create_run(

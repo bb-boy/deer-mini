@@ -29,7 +29,7 @@ RecordEvent = Callable[[RunEventType, dict[str, Any]], Awaitable[RunEvent]]
 
 
 #定义一个输入是user_id,thread_id,workspace_path,和一个消息列表的threadstate，输出是checkpoint的可调用类型
-SaveCheckpoint = Callable[[ThreadState], Checkpoint]
+SaveCheckpoint = Callable[[ThreadState], Awaitable[Checkpoint]]
 
 
 @dataclass(frozen =True)
@@ -39,6 +39,8 @@ class RuntimeContext:
     run_id: str
     workspace_path: str
 
+    # 返回内存事件；文字直接发送，其他辅助日志交给后台有限重试。
     record_event: RecordEvent
 
+    # 必须 await 成功后才能继续关键步骤；写库在线程中，不阻塞 SSE。
     save_checkpoint: SaveCheckpoint

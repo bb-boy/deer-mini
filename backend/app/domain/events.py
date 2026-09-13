@@ -13,6 +13,8 @@ from app.domain.common import new_id, utc_now
 RunEventType = Literal[
     "run.start",
     "text.delta",
+    "reasoning.delta",
+    "message.complete",
     "tool.start",
     "tool.end",
     "run.end",
@@ -43,7 +45,7 @@ class RunEvent:
     """
 
     id: str = field(default_factory=new_id)  # 每次创建一个实例，都默认生成一个新的uuid
-    sequence: int | None = None  # 一个run内事件的顺序号，None表示未分配顺序号，一个 Run 内，从 1 开始递增的事件编号
+    sequence: int | None = None  # 仅表示已保存日志的顺序；实时事件允许没有数据库顺序号。
 
     """
     Run r-001

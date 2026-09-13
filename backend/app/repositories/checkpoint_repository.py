@@ -122,6 +122,17 @@ class CheckpointRepository:
             ).fetchall()
 
             return [self._row_to_checkpoint(row) for row in rows]
+
+    def latest_for_run(self, thread_id: str, run_id: str, user_id: str) -> Checkpoint | None:
+        """流缓存丢失时恢复指定 Run，避免误取同一对话中后续 Run 的状态。"""
+        with connect() as conn:
+            row = conn.execute(
+                """SELECT c.* FROM checkpoints c JOIN threads t ON t.id = c.thread_id
+                   WHERE c.thread_id = ? AND c.run_id = ? AND t.user_id = ?
+                   ORDER BY c.step DESC, c.id DESC LIMIT 1""",
+                (thread_id, run_id, user_id),
+            ).fetchone()
+        return None if row is None else self._row_to_checkpoint(row)
         
 
 

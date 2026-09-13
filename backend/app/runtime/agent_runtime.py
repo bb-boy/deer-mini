@@ -1,44 +1,44 @@
-
-
-
-
-
+"""协调 Run、Agent、关键状态和实时流；辅助日志失败不改变执行结果。"""
 
 import asyncio
-from typing import Callable
-from app.domain.messages import Message
+import logging
+from collections.abc import Awaitable, Callable
+from copy import deepcopy
+
 from app.domain.checkpoints import Checkpoint
+from app.domain.messages import Message
 from app.domain.runs import Run
 from app.domain.threads import Thread, ThreadState
 from app.repositories.checkpoint_repository import CheckpointRepository
 from app.repositories.run_repository import RunRepository
 from app.repositories.thread_repository import ThreadRepository
 from app.runtime.agent import Agent
-from app.runtime.context import RuntimeContext
+from app.runtime.async_io import finish_inflight, run_sync
+from app.runtime.context import RuntimeContext, SaveCheckpoint
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.stream_bridge import MemoryStreamBridge
 from app.sandbox.base import SandboxLifecycle
 from app.services.run_service import RunService
 
 
-class AgentRuntime:
-    """
-    协调一次完整 Run 的执行。
+logger = logging.getLogger(__name__)
+TERMINAL_EVENT_TYPES = {
+    "success": "run.end", "error": "run.error",
+    "timeout": "run.timeout", "interrupted": "run.interrupted",
+}
 
-    它不负责让 LLM 思考；
-    它只负责把状态、事件、Run 生命周期和 Agent 串起来。
-    """
+
+class AgentRuntime:
+    """一次 Run 的总协调器，Agent 仍通过受控 Context 保存关键状态。"""
 
     def __init__(
-        self,
-        stream_bridge: MemoryStreamBridge,
+        self, stream_bridge: MemoryStreamBridge,
         checkpoint_repository: CheckpointRepository | None = None,
         thread_repository: ThreadRepository | None = None,
         run_repository: RunRepository | None = None,
         run_service: RunService | None = None,
         sandbox_lifecycle: SandboxLifecycle | None = None,
     ) -> None:
-
         self._stream_bridge = stream_bridge
         self._checkpoint_repository = checkpoint_repository or CheckpointRepository()
         self._thread_repository = thread_repository or ThreadRepository()
@@ -46,309 +46,229 @@ class AgentRuntime:
         self._run_service = run_service or RunService()
         self._sandbox_lifecycle = sandbox_lifecycle
 
-
-    #检查用户是否用哟这个对话，以及这个这个run是否存在或者是否属于这个对话
-    def _get_owned_thread_and_run(self, user_id: str, thread_id: str, run_id: str) -> tuple[Thread, Run]:
-        """
-        获取用户拥有的 Thread 和 Run。
-        如果用户没有权限访问该 Thread 或 Run，则抛出异常。
-        """
+    def _get_owned_thread_and_run(
+        self, user_id: str, thread_id: str, run_id: str,
+    ) -> tuple[Thread, Run]:
         thread = self._thread_repository.get(thread_id, user_id)
         if thread is None:
-            raise ValueError(f"Thread with id {thread_id} and user_id {user_id} does not exist.")
-
+            raise ValueError("Thread 不存在，或不属于当前用户")
         run = self._run_repository.get(run_id, user_id)
         if run is None or run.thread_id != thread_id:
             raise ValueError("Run 不存在，或不属于当前 Thread")
-
         return thread, run
 
-
-    #恢复这个 Thread 的最新对话状态。
-    #第一次对话没有 Checkpoint，就创建空状态；
-    #后续对话则从最新 Checkpoint 恢复历史消息。返回checkpoint.state字段这是一个ThreadState对象，包含所有的messages
-    def _load_state(self,thread: Thread,) -> ThreadState:
-        """
-        恢复这个 Thread 的最新对话状态。
-
-        第一次对话没有 Checkpoint，就创建空状态；
-        后续对话则从最新 Checkpoint 恢复历史消息。
-        """
-
-        #从数据库中读取某个用户的某个对话的最新 Checkpoint，如果有，就恢复 ThreadState；如果没有，就创建一个新的 ThreadState
+    def _load_state(self, thread: Thread) -> ThreadState:
         checkpoint = self._checkpoint_repository.latest(thread.id, thread.user_id)
         if checkpoint is not None:
             return checkpoint.state
-        else:
-            return ThreadState(
-            thread_id=thread.id,
-            user_id=thread.user_id,
-            messages=[],
+        return ThreadState(
+            thread_id=thread.id, user_id=thread.user_id, messages=[],
             workspace_path=thread.workspace_path,
-        )  # 返回一个新的 ThreadState
+        )
 
+    async def _create_checkpoint_saver(
+        self, user_id: str, thread: Thread, run: Run,
+    ) -> SaveCheckpoint:
+        """为这个 Run 创建异步保存入口；step 在成功提交后递增。"""
+        history = await run_sync(self._checkpoint_repository.history, thread.id, user_id, run.id)
+        next_step = history[-1].step + 1 if history else 1
+        lock = asyncio.Lock()
 
-
-    def _create_checkpoint_saver(self,
-        user_id: str,
-        thread: Thread,
-        run: Run) -> Callable[[ThreadState], Checkpoint]:
-
-
-        """
-        为一次 Run 创建专属的“保存状态按钮”。
-
-        返回的函数每被调用一次，
-        都会保存一份 Checkpoint，并自动增加 step。
-        """
-
-
-        history = self._checkpoint_repository.history(thread.id, user_id, run.id)
-
-
-
-        if history:
-            next_step = history[-1].step +1
-        else:
-            next_step = 1
-
-        def save_checkpoint(state: ThreadState) -> Checkpoint:
+        async def save_checkpoint(state: ThreadState) -> Checkpoint:
             nonlocal next_step
-            checkpoint = Checkpoint(
-                thread_id=thread.id,
-                run_id=run.id,
-                step=next_step,
-                state=state,
-            )
-            saved_checkpoint = self._checkpoint_repository.save(checkpoint)
-            next_step += 1
-            return saved_checkpoint
+            if state.thread_id != thread.id or state.user_id != user_id:
+                raise ValueError("Checkpoint 状态不属于当前用户和 Thread")
+            async with lock:
+                checkpoint = Checkpoint(
+                    thread_id=thread.id, run_id=run.id, step=next_step,
+                    state=deepcopy(state),
+                )
 
+                def persist() -> Checkpoint:
+                    nonlocal next_step
+                    saved = self._checkpoint_repository.save(checkpoint)
+                    # 即使刚好收到取消，提交成功的 step 也不能被重复使用。
+                    next_step += 1
+                    return saved
+
+                return await run_sync(persist)
 
         return save_checkpoint
 
-
-
-
-    async def run(self,
-        user_id: str,
-        thread_id: str,
-        run_id: str,
-        user_message: str,
-        agent: Agent,
-        timeout_seconds: float = 240.0,
+    async def run(
+        self, user_id: str, thread_id: str, run_id: str,
+        user_message: str, agent: Agent, timeout_seconds: float = 240.0,
     ) -> ThreadState:
-
-        """
-        用户发送一条消息后，系统保存这条消息、
-        启动 Run、实时显示“任务开始”，
-        把任务交给 Agent；Agent
-        成功后保存结果并结束任务，
-        出错则记录错误并结束直播。
-        """
-
-        #1 检查用户是否有权限访问这个对话和这个run
-        thread, run = self._get_owned_thread_and_run(user_id, thread_id, run_id)
-        if thread is None or run is None:
-            raise ValueError("Thread 或 Run 不存在，或不属于当前用户")
-
-
-
-
-        #2 创建一个专属的“保存状态按钮”，每次调用都会保存一份 Checkpoint，并自动增加 step
-        save_checkpoint = self._create_checkpoint_saver(user_id, thread, run)
-
-        #3 创建一个event recorder，记录事件到数据库，并实时推送到前端
-        recorder = EventRecorder(
-            user_id=user_id,
-            thread_id=thread.id,
-            run_id=run.id,
-            stream_bridge=self._stream_bridge,
-        )
-
-        started =  False
+        recorder = EventRecorder(user_id, thread_id, run_id, self._stream_bridge)
+        thread: Thread | None = None
+        run: Run | None = None
         state: ThreadState | None = None
+        save_checkpoint: SaveCheckpoint | None = None
+        original_error: BaseException | None = None
+        sandbox_released = False
+
+        def load_owned_run() -> None:
+            nonlocal thread, run
+            # 查询期间收到取消，也先保留已验证的归属，之后才能安全收尾。
+            thread, run = self._get_owned_thread_and_run(user_id, thread_id, run_id)
+
+        async def release_sandbox() -> None:
+            nonlocal sandbox_released
+            if sandbox_released or run is None:
+                return
+            if self._sandbox_lifecycle is not None:
+                await self._sandbox_lifecycle.end_run(
+                    user_id=user_id, thread_id=thread_id, run_id=run_id,
+                )
+            sandbox_released = True
 
         try:
+            await run_sync(load_owned_run)
+            assert thread is not None and run is not None
+            save_checkpoint = await self._create_checkpoint_saver(user_id, thread, run)
+            state = await run_sync(self._load_state, thread)
+            state.messages.append(Message(role="user", content=user_message))
+            await save_checkpoint(state)
+            if not await run_sync(self._run_service.start_run, run_id, user_id):
+                raise RuntimeError("Run 无法从 pending 状态启动")
 
-            #4 恢复这个对话的最新状态
-            state = self._load_state(thread)
-
-            #5 用户消息加入到状态中
-            state.messages.append(
-                Message(role="user", content=user_message)
-            )
-
-            #保存用户消息的 Checkpoint
-            save_checkpoint(state)
-
-
-
-            # 6. 只有 Run 成功从 pending 变成 running，
-            # 才允许继续调用 Agent。
-            if not self._run_service.start_run(run.id, user_id):
-                raise RuntimeError(
-                    "Run 无法从 pending 状态启动"
-                )
-
-            # 这个标记用于 except：
-            # 后续发生异常时，Runtime 才能安全把 Run 结束为 error。
-            started = True
-
-            # Run 期间占用已有容器；没有容器时，仍等首次 Bash 才创建。
             if self._sandbox_lifecycle is not None:
                 await self._sandbox_lifecycle.begin_run(
                     user_id=user_id, thread_id=thread_id, run_id=run_id,
                     workspace_path=thread.workspace_path,
                 )
 
-            #7 保存并实时推送
-            await recorder.record_event("run.start",
-                {"model_name": run.model_name,
-                 "thinking_enabled": run.thinking_enabled,
-                 "reasoning_effort": run.reasoning_effort})
-
-
-            #8 发布一个meta事件，告诉前端当前的run已经开始，但是不保存为runevent
-            await self._stream_bridge.publish(run.id, "metadata", {
-                "run_id": run.id,
-                "thread_id": thread.id,
+            await recorder.record_event("run.start", {
+                "model_name": run.model_name, "thinking_enabled": run.thinking_enabled,
+                "reasoning_effort": run.reasoning_effort,
             })
-
-
-            #9 创建一个运行时上下文，传给Agent
+            await self._stream_bridge.publish(run_id, "metadata", {
+                "run_id": run_id, "thread_id": thread_id,
+            })
             context = RuntimeContext(
-                user_id=user_id,
-                thread_id=thread_id,
-                run_id=run_id,
+                user_id=user_id, thread_id=thread_id, run_id=run_id,
                 workspace_path=thread.workspace_path,
-                record_event=recorder.record_event,
-                save_checkpoint=save_checkpoint,
+                record_event=recorder.record_event, save_checkpoint=save_checkpoint,
             )
-
-            #10 把上下文传给 Agent，并限制整个模型/工具循环的最长时间。
-            # asyncio.timeout 到期时会先取消 agent.run，让 LeadAgent 的
-            # finally 有机会关闭真实模型客户端，然后在这里抛出 TimeoutError。
             async with asyncio.timeout(timeout_seconds):
                 final_state = await agent.run(state, context)
 
-
-
-            # 防止错误 Agent 返回其他用户或其他 Thread 的状态。
-            if (
-                final_state.thread_id != thread_id
-                or final_state.user_id != user_id
-            ):
+            if final_state.thread_id != thread_id or final_state.user_id != user_id:
                 raise ValueError("Agent 返回了不属于当前 Thread 的状态")
-
-            # 保存 Agent 最终得到的完整状态。
-            save_checkpoint(final_state)
-
-            #  记录结束事件，再结束 Run。
-            await recorder.record_event(
-                "run.end",
-                {"status": "success"},
-            )
-
-            if not self._run_service.finish_run(
-                run_id,
-                user_id,
-                "success",
-            ):
+            await save_checkpoint(final_state)
+            # Thread 一旦变回 idle 就能接下一轮；必须先归还本轮执行环境。
+            await release_sandbox()
+            # 必须先确认关键状态和 Run/Thread 终态，再向浏览器宣告成功。
+            if not await run_sync(self._run_service.finish_run, run_id, user_id, "success"):
                 raise RuntimeError("Run 无法结束为 success")
-
+            await recorder.record_event("run.end", {"status": "success", "status_confirmed": True})
             return final_state
 
-        except TimeoutError:
-            timeout_message = (
-                f"Agent Run exceeded {timeout_seconds:g} seconds"
-            )
+        except (Exception, asyncio.CancelledError) as error:
+            original_error = error
+            if run is None:
+                # 归属未通过验证，不能修改或关闭传入 id 对应的其他 Run。
+                raise
+            if isinstance(error, asyncio.CancelledError):
+                status = "interrupted"
+                details = {"reason": str(error) or "cancelled"}
+            elif isinstance(error, TimeoutError):
+                status = "timeout"
+                details = {
+                    "timeout_seconds": timeout_seconds,
+                    "message": f"Agent Run exceeded {timeout_seconds:g} seconds",
+                }
+            else:
+                status = "error"
+                details = {
+                    "error_type": type(error).__name__,
+                    "message": str(error) or type(error).__name__,
+                }
             try:
-                if state is not None:
-                    # 保留超时发生时已经完成的消息和工具结果。
-                    save_checkpoint(state)
-                await recorder.record_event(
-                    "run.timeout",
-                    {
-                        "status": "timeout",
-                        "timeout_seconds": timeout_seconds,
-                        "message": timeout_message,
-                    },
-                )
-            finally:
-                self._run_service.finish_run(
-                    run_id,
-                    user_id,
-                    "timeout",
-                    timeout_message,
-                )
-
-            # 后台任务仍以 TimeoutError 结束，Coordinator 会把它当作
-            # 已正确收尾的预期终态，而不是未知程序错误。
+                # 第二次取消不能打断第一次取消的收尾，原始异常始终继续向上抛出。
+                await finish_inflight(asyncio.create_task(self._finish_failure(
+                    user_id, run_id, status, details, state, save_checkpoint, recorder,
+                    release_sandbox,
+                )))
+            except (Exception, asyncio.CancelledError):
+                logger.exception("Run %s 收尾发生异常，保留最初的执行异常", run_id)
             raise
-
-        except asyncio.CancelledError as cancel_error:
-            # task.cancel() 会在当前 await 位置抛出 CancelledError。
-            # 必须显式保存 interrupted；它不属于普通 Exception。
-            cancel_reason = str(cancel_error) or "cancelled"
-            try:
-                if state is not None:
-                    # 保存取消瞬间已经形成的完整消息，方便之后查看和继续对话。
-                    save_checkpoint(state)
-                await recorder.record_event(
-                    "run.interrupted",
-                    {
-                        "status": "interrupted",
-                        "reason": cancel_reason,
-                    },
-                )
-            finally:
-                self._run_service.interrupt_run(
-                    run_id,
-                    user_id,
-                    cancel_reason,
-                )
-
-            # 保留 asyncio 的取消语义，让 Coordinator 知道任务确实被取消。
-            raise
-
-        except Exception as error:
-            # Agent 或 Runtime 出错时，记录错误并更新 Run 状态。
-            if started:
-                error_message = str(error) or error.__class__.__name__
-
-                await recorder.record_event(
-                    "run.error",
-                    {
-                        "error_type": error.__class__.__name__,
-                        "message": error_message,
-                    },
-                )
-
-                self._run_service.finish_run(
-                    run_id,
-                    user_id,
-                    "error",
-                    error_message,
-                )
-
-            # 不吞掉错误，让未来 API 知道本次请求失败。
-            raise
-
         finally:
-            try:
-                if self._sandbox_lifecycle is not None:
+            async def cleanup() -> None:
+                try:
+                    await release_sandbox()
+                finally:
                     try:
-                        # 空闲锁下直接归还，不在 Run 终态与归还之间额外调度任务。
-                        await self._sandbox_lifecycle.end_run(
-                            user_id=user_id, thread_id=thread_id, run_id=run_id,
-                        )
-                    except asyncio.CancelledError:
-                        cleanup = asyncio.create_task(self._sandbox_lifecycle.end_run(
-                            user_id=user_id, thread_id=thread_id, run_id=run_id,
-                        ))
-                        await asyncio.shield(cleanup)
-                        raise
-            finally:
-                # 归还失败也必须结束直播，避免浏览器一直等待。
-                await self._stream_bridge.publish_end(run_id)
+                        await recorder.close()
+                    finally:
+                        if run is not None:
+                            await self._stream_bridge.publish_end(run_id)
+
+            try:
+                await finish_inflight(asyncio.create_task(cleanup()))
+            except asyncio.CancelledError:
+                if original_error is None:
+                    raise
+            except Exception:
+                logger.exception("Run %s 清理失败，Stream 已尝试结束", run_id)
+                if original_error is None:
+                    raise
+
+    async def _finish_failure(
+        self, user_id: str, run_id: str, status: str, details: dict,
+        state: ThreadState | None, save_checkpoint: SaveCheckpoint | None,
+        recorder: EventRecorder,
+        release_sandbox: Callable[[], Awaitable[None]],
+    ) -> None:
+        """保存真实终态并发送独立通知，日志故障不会掩盖原始错误。"""
+        try:
+            await release_sandbox()
+        except Exception:
+            logger.exception("Run %s 的执行环境归还失败，将在最终清理时重试", run_id)
+        # 取消可能恰好发生在 success 提交期间；以已经提交的终态为准。
+        current = None
+        try:
+            current = await run_sync(self._run_service.get_run, run_id, user_id)
+        except Exception:
+            logger.exception("无法读取 Run %s 的状态，将继续尝试保存错误状态", run_id)
+        if current is not None and current.status in TERMINAL_EVENT_TYPES:
+            await recorder.record_event(TERMINAL_EVENT_TYPES[current.status], {
+                "status": current.status, "status_confirmed": True,
+                **({"message": current.error} if current.error else {}),
+            })
+            return
+
+        if status in {"interrupted", "timeout"} and state is not None and save_checkpoint is not None:
+            try:
+                await save_checkpoint(state)
+            except Exception as checkpoint_error:
+                logger.exception("Run %s 的关键状态保存失败", run_id)
+                status = "error"
+                details = {
+                    **details, "error_type": type(checkpoint_error).__name__,
+                    "message": f"结束时关键状态保存失败：{checkpoint_error}",
+                }
+
+        message = str(details.get("message") or details.get("reason") or status)
+        confirmed = False
+        try:
+            if status == "interrupted":
+                confirmed = await run_sync(self._run_service.interrupt_run, run_id, user_id, message)
+            elif status == "timeout":
+                confirmed = await run_sync(self._run_service.finish_run, run_id, user_id, status, message)
+            else:
+                # 这个原子操作同时支持 pending/running，启动前保存失败也能正确收尾。
+                confirmed = await run_sync(self._run_service.recover_orphaned_run, run_id, user_id, message)
+            if not confirmed:
+                current = await run_sync(self._run_service.get_run, run_id, user_id)
+                if current is not None and current.status in TERMINAL_EVENT_TYPES:
+                    status, confirmed = current.status, True
+                    details = {"message": current.error} if current.error else {}
+        except Exception:
+            logger.exception("Run %s 的终态未能保存，不能声称数据库状态已确认", run_id)
+
+        await recorder.record_event(
+            TERMINAL_EVENT_TYPES[status] if confirmed else "run.error",
+            {**details, "status": status if confirmed else "unknown", "status_confirmed": confirmed,
+             **({} if confirmed else {"message": f"{message}；最终状态未能保存，请稍后重新查询"})},
+        )

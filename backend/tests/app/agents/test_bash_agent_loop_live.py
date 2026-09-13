@@ -53,7 +53,7 @@ def _build_context(workspace: Path) -> RuntimeContext:
         events.append(event)
         return event
 
-    def save_checkpoint(state: ThreadState) -> Checkpoint:
+    async def save_checkpoint(state: ThreadState) -> Checkpoint:
         checkpoint = Checkpoint(
             thread_id=state.thread_id,
             run_id="run-bash-live",
@@ -96,6 +96,7 @@ class ScriptedBashModel:
         thinking_enabled: bool = False,
         reasoning_effort: str | None = None,
         on_text_delta: TextDeltaHandler | None = None,
+        on_reasoning_delta: TextDeltaHandler | None = None,
     ) -> Message:
         self.call_count += 1
         if self.call_count == 1:

@@ -34,6 +34,7 @@ class ScriptedToolCallingModel:
         thinking_enabled: bool = False,
         reasoning_effort: str | None = None,
         on_text_delta: TextDeltaHandler | None = None,
+        on_reasoning_delta: TextDeltaHandler | None = None,
     ) -> Message:
         # 保存副本，避免随后 Agent 向同一个 state 追加消息影响断言。
         self.received_messages.append(
@@ -113,7 +114,7 @@ def build_recording_context(
         events.append(event)
         return event
 
-    def save_checkpoint(state: ThreadState) -> Checkpoint:
+    async def save_checkpoint(state: ThreadState) -> Checkpoint:
         checkpoint = Checkpoint(
             thread_id=state.thread_id,
             run_id="run-agent-loop-test",
@@ -182,16 +183,19 @@ def test_agent_loop_executes_real_tool_and_returns_result_to_model(
 
     assert [event.event_type for event in events] == [
         "text.delta",
+        "message.complete",
         "tool.start",
         "tool.end",
         "text.delta",
+        "message.complete",
     ]
-    assert events[1].payload["tool_name"] == "read_file"
-    assert events[2].payload["content"] == "项目代号：青鹿-728。负责人：小明。"
+    assert events[2].payload["tool_name"] == "read_file"
+    assert events[3].payload["content"] == "项目代号：青鹿-728。负责人：小明。"
+    assert events[0].payload["message_id"] == events[1].payload["message"]["id"]
+    assert events[4].payload["message_id"] == final_state.messages[-1].id
 
-    # LeadAgent 保存“模型决定调用工具”和“工具执行完成”两个关键快照；
-    # 最终回答由上层 AgentRuntime 再保存。
-    assert [checkpoint.step for checkpoint in checkpoints] == [1, 2]
+    # 每轮完整模型消息和工具结果都保存关键快照。
+    assert [checkpoint.step for checkpoint in checkpoints] == [1, 2, 3]
     assert [message.role for message in checkpoints[0].state.messages] == [
         "user",
         "assistant",
@@ -201,6 +205,36 @@ def test_agent_loop_executes_real_tool_and_returns_result_to_model(
         "assistant",
         "tool",
     ]
+
+
+def test_reasoning_stream_shares_message_identity_and_preserves_tool_loop(tmp_path: Path) -> None:
+    class ThinkingModel(ScriptedToolCallingModel):
+        async def chat(self, **kwargs):
+            thought = f"第 {len(self.received_messages) + 1} 轮思考"
+            await kwargs["on_reasoning_delta"](thought)
+            result = await super().chat(**kwargs)
+            result.reasoning_content = thought
+            return result
+
+    async def scenario():
+        (tmp_path / "report.txt").write_text("项目代号：青鹿-728。负责人：小明。", encoding="utf-8")
+        context, events, checkpoints = build_recording_context(tmp_path)
+        registry, executor = build_registry_and_executor()
+        agent = LeadAgent(ThinkingModel(), registry, executor, thinking_enabled=True)
+        state = ThreadState(thread_id=context.thread_id, user_id=context.user_id,
+                            messages=[Message(role="user", content="读取报告")])
+        final = await agent.run(state, context)
+        thoughts = [event for event in events if event.event_type == "reasoning.delta"]
+        complete = [event for event in events if event.event_type == "message.complete"]
+        assert len(thoughts) == len(complete) == 2
+        for thought, message_event in zip(thoughts, complete):
+            assert thought.payload["message_id"] == message_event.payload["message"]["id"]
+            assert thought.payload["text"] == message_event.payload["message"]["reasoning_content"]
+            assert events.index(thought) < events.index(message_event)
+        assert [message.role for message in final.messages] == ["user", "assistant", "tool", "assistant"]
+        assert checkpoints[-1].state.messages[-1].reasoning_content == "第 2 轮思考"
+
+    asyncio.run(scenario())
 
 
 def test_agent_loop_closes_model_and_preserves_error(tmp_path: Path) -> None:

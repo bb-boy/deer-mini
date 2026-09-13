@@ -105,10 +105,9 @@ def test_run_saves_state_records_events_and_ends_stream(
         "我已处理这条用户消息",
     ]
 
-    # 业务事件会持久化到 SQLite。
+    # 辅助日志按序保存；文字片段只存在于实时流，完整回答在 Checkpoint 中。
     assert [event.event_type for event in events] == [
         "run.start",
-        "text.delta",
         "run.end",
     ]
 

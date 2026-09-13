@@ -1,6 +1,8 @@
 """Thread、Run 和 SSE 的 FastAPI 路由。"""
 
+import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
@@ -34,6 +36,7 @@ from app.services.workspace_file_service import (
 
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger(__name__)
 
 
 @router.get("/models", response_model=ModelsResponse)
@@ -419,80 +422,105 @@ def _encode_sse(event: StreamEvent) -> str:
     return f"{id_line}event: {event.event}\ndata: {data}\n\n"
 
 
-def _persisted_stream_event(event: RunEvent) -> StreamEvent:
-    """把 SQLite 中的 RunEvent 包装成 SSE 传输事件。"""
-    return StreamEvent(
-        id=event.id,
-        event="run_event",
-        data=event.to_dict(),
-    )
+def _state_snapshot(thread_id: str, run_id: str, user_id: str, reason: str) -> StreamEvent:
+    """给浏览器一份已保存的状态；这条控制消息不作为数据库日志。"""
+    repo = CheckpointRepository()
+    checkpoint = repo.latest_for_run(thread_id, run_id, user_id)
+    run = _require_owned_run(thread_id, run_id, user_id)
+    if checkpoint is None and run.status in {"pending", "running"}:
+        checkpoint = repo.latest(thread_id, user_id)
+    return StreamEvent("", "stream.reset", {
+        "thread_id": thread_id, "run_id": run_id, "reason": reason,
+        "checkpoint": CheckpointResponse.model_validate(checkpoint).model_dump()
+        if checkpoint is not None else None,
+    })
 
 
-def _replay_start_index(
-    events: list[RunEvent],
-    last_event_id: str | None,
-) -> int:
-    """找到 Last-Event-ID 后的第一条数据库事件；未知 ID 时从头回放。"""
-    if not last_event_id:
-        return 0
-
-    for index, event in enumerate(events):
-        if event.id == last_event_id:
-            return index + 1
-    return 0
+_TERMINAL_EVENTS = {
+    "success": "run.end", "error": "run.error",
+    "timeout": "run.timeout", "interrupted": "run.interrupted",
+}
 
 
 @router.get("/threads/{thread_id}/runs/{run_id}/events")
 def stream_run_events(
-    thread_id: str,
-    run_id: str,
-    request: Request,
+    thread_id: str, run_id: str, request: Request,
     user_id: str = Query(min_length=1),
 ) -> StreamingResponse:
-    """订阅一次 Run 的文字、工具和结束事件。"""
+    """优先续传内存流；缓存丢失后用 Checkpoint 和实际日志恢复。"""
     run = _require_owned_run(thread_id, run_id, user_id)
     last_event_id = request.headers.get("last-event-id")
     bridge = _stream_bridge(request)
-    persisted_events = EventRepository().list_for_run(
-        thread_id,
-        run_id,
-        user_id,
-    )
-    replay_start = _replay_start_index(
-        persisted_events,
-        last_event_id,
-    )
-    latest_persisted_sequence = max(
-        (event.sequence or 0 for event in persisted_events),
-        default=0,
-    )
+
+    async def snapshot(reason: str) -> str:
+        event = await asyncio.to_thread(_state_snapshot, thread_id, run_id, user_id, reason)
+        return _encode_sse(event)
+
+    async def saved_process_events() -> AsyncIterator[str]:
+        # 完整消息由快照恢复；辅助日志只补回确实保存过的工具等过程。
+        try:
+            persisted = await asyncio.to_thread(
+                EventRepository().list_for_run, thread_id, run_id, user_id,
+            )
+        except Exception:
+            logger.warning("读取 Run %s 的辅助历史日志失败", run_id, exc_info=True)
+            return
+        for event in persisted:
+            if event.event_type in {"text.delta", "message.complete", *_TERMINAL_EVENTS.values()}:
+                continue
+            yield _encode_sse(StreamEvent(f"h:{event.id}", "run_event", event.to_dict()))
 
     async def event_stream() -> AsyncIterator[str]:
-        # 先补发断线期间已经写入 SQLite 的可靠事件。
-        for event in persisted_events[replay_start:]:
-            yield _encode_sse(_persisted_stream_event(event))
+        terminal_sent = False
+        # StreamingResponse 真正开始发送时，Run 可能已在后台完成，重新读取一次。
+        current = await asyncio.to_thread(_require_owned_run, thread_id, run_id, user_id)
+        if not last_event_id:
+            # 首次连接也先交代已保存的完整消息，重播片段时可按 message_id 去重。
+            yield await snapshot("initial")
 
-        # 终态 Run 不会再产生事件，历史回放完成后立即关闭连接。
-        if run.status not in {"pending", "running"}:
-            return
-
-        # 活跃 Run 再接内存实时流。快照中已有的 sequence 会被过滤，
-        # 避免同一事件从 SQLite 和 MemoryStreamBridge 各发送一次。
-        async for event in bridge.subscribe(run_id):
-            if event.event == "run_event":
-                sequence = event.data.get("sequence")
-                if (
-                    isinstance(sequence, int)
-                    and sequence <= latest_persisted_sequence
-                ):
+        retained = await bridge.stream_exists(run_id)
+        if retained or current.status in {"pending", "running"}:
+            async for event in bridge.subscribe(run_id, last_event_id=last_event_id):
+                if event.event == "__heartbeat__":
+                    # 覆盖极短保留时间下的结束/清理竞争，避免等一个已经完成的 Run。
+                    latest = await asyncio.to_thread(_require_owned_run, thread_id, run_id, user_id)
+                    if latest.status in _TERMINAL_EVENTS:
+                        break
+                if event.event == "stream.gap":
+                    yield await snapshot(str(event.data["reason"]))
+                    async for saved_event in saved_process_events():
+                        yield saved_event
                     continue
-            yield _encode_sse(event)
+                if event.event == "run_event" and event.data.get("event_type") in _TERMINAL_EVENTS.values():
+                    terminal_sent = True
+                yield _encode_sse(event)
+        else:
+            if last_event_id:
+                yield await snapshot("stream_lost")
+            # 旧日志可能缺失；只恢复实际存在的过程记录，不重复拼接历史文字。
+            async for saved_event in saved_process_events():
+                yield saved_event
+
+        if not terminal_sent:
+            # 即使 run.end 日志丢失，也必须独立通知已经确认的真实终态。
+            latest = await asyncio.to_thread(_require_owned_run, thread_id, run_id, user_id)
+            if latest.status in _TERMINAL_EVENTS:
+                terminal = RunEvent(
+                    id=f"terminal:{run_id}:{latest.status}",
+                    run_id=run_id, thread_id=thread_id,
+                    event_type=_TERMINAL_EVENTS[latest.status],
+                    payload={"status": latest.status, "status_confirmed": True,
+                             **({"message": latest.error} if latest.error else {})},
+                )
+                yield _encode_sse(StreamEvent(terminal.id, "run_event", terminal.to_dict()))
+            else:
+                # 连接关闭只能表示流结束，不能凭空宣告 Run 成功。
+                yield _encode_sse(StreamEvent("", "stream.unconfirmed", {
+                    "run_id": run_id, "thread_id": thread_id,
+                    "message": "输出连接已结束，但运行结果尚未确认，请稍后重新查询",
+                }))
 
     return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        event_stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 from app.agents.middleware import AgentMiddleware, MiddlewareManager
 from app.domain.threads import ThreadState
+from app.domain.common import new_id
 from app.model.base import ChatModel
 from app.runtime.context import RuntimeContext
 from app.tools.executor import ToolExecutor
@@ -83,11 +84,21 @@ class LeadAgent:
     ) -> ThreadState:
         """执行真正的模型与工具循环。"""
 
-        async def record_text_delta(text: str) -> None:
-            # EventRecorder 会先持久化为 RunEvent，再推送到 StreamBridge。
-            await context.record_event("text.delta", {"text": text})
-
         for round_number in range(1, self._max_tool_rounds + 1):
+            # 实时片段和最后的完整消息使用同一个身份，恢复状态时才能去重。
+            message_id = new_id()
+
+            async def record_text_delta(text: str) -> None:
+                await context.record_event(
+                    "text.delta", {"text": text, "message_id": message_id},
+                )
+
+            async def record_reasoning_delta(text: str) -> None:
+                # 思考与正文使用同一条消息编号，前端不会把它们拆成两个回复。
+                await context.record_event(
+                    "reasoning.delta", {"text": text, "message_id": message_id},
+                )
+
             await self._middleware.before_model(state, context)
             assistant_message = await self._model.chat(
                 messages=state.messages,
@@ -95,7 +106,9 @@ class LeadAgent:
                 thinking_enabled=self._thinking_enabled,
                 reasoning_effort=self._reasoning_effort,
                 on_text_delta=record_text_delta,
+                on_reasoning_delta=record_reasoning_delta,
             )
+            assistant_message.id = message_id
             state.messages.append(assistant_message)
             await self._middleware.after_model(
                 state,
@@ -103,12 +116,13 @@ class LeadAgent:
                 assistant_message,
             )
 
+            # 每轮完整消息（包括工具调用决定）都保存为关键状态。
+            await context.save_checkpoint(state)
+            await context.record_event(
+                "message.complete", {"message": assistant_message.to_dict(), "round": round_number},
+            )
             if not assistant_message.tool_calls:
-                # 最终回答由 AgentRuntime.run() 统一保存，避免重复快照。
                 return state
-
-            # 先保存模型的完整工具调用决定。
-            context.save_checkpoint(state)
 
             # 第一版支持一轮多个工具调用，但按模型给出的顺序执行。
             for tool_call in assistant_message.tool_calls:
@@ -133,7 +147,7 @@ class LeadAgent:
                     tool_call,
                     tool_message,
                 )
-                context.save_checkpoint(state)
+                await context.save_checkpoint(state)
 
                 await context.record_event(
                     "tool.end",

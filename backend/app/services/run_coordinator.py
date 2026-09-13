@@ -12,6 +12,7 @@ from app.domain.runs import Run
 from app.domain.threads import ThreadState
 from app.model.factory import ModelFactory
 from app.runtime.agent_runtime import AgentRuntime
+from app.runtime.async_io import run_sync
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.stream_bridge import MemoryStreamBridge
 from app.sandbox.base import CommandRunner
@@ -205,19 +206,20 @@ class RunCoordinator:
                 run_id=run_id,
                 stream_bridge=self._stream_bridge,
             )
-            await recorder.record_event(
-                "run.interrupted",
-                {
-                    "status": "interrupted",
-                    "reason": "cancelled_by_user",
-                },
-            )
-            self._run_service.interrupt_run(
-                run_id,
-                user_id,
-                "cancelled_by_user",
-            )
-            await self._stream_bridge.publish_end(run_id)
+            try:
+                confirmed = await run_sync(
+                    self._run_service.interrupt_run, run_id, user_id, "cancelled_by_user",
+                )
+                if confirmed:
+                    await recorder.record_event("run.interrupted", {
+                        "status": "interrupted", "status_confirmed": True,
+                        "reason": "cancelled_by_user",
+                    })
+            finally:
+                try:
+                    await recorder.close()
+                finally:
+                    await self._stream_bridge.publish_end(run_id)
 
         result = self._run_service.get_run(run_id, user_id)
         if result is None:
@@ -275,7 +277,10 @@ class RunCoordinator:
                     candidate.id,
                 )
             finally:
-                await self._stream_bridge.publish_end(candidate.id)
+                try:
+                    await recorder.close()
+                finally:
+                    await self._stream_bridge.publish_end(candidate.id)
 
             result = self._run_service.get_run(
                 candidate.id,
@@ -323,6 +328,7 @@ class RunCoordinator:
             task.cancel("server_shutdown")
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        await EventRecorder.shutdown_writers()
         if self._sandbox_manager is not None:
             await self._sandbox_manager.close()
 

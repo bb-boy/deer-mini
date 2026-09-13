@@ -7,3 +7,6 @@ workspace/
 *.db
 *.sqlite3
 backend/data/*.db
+
+# 本地服务运行日志
+/backend/logs/

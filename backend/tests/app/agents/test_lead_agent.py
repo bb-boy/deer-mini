@@ -22,7 +22,8 @@ from app.tools.registry import ToolRegistry
 class ScriptedToolCallingModel:
     """第一轮调用 read_file，第二轮收到工具结果后给出最终回答。"""
 
-    def __init__(self) -> None:
+    def __init__(self, path: str = "report.txt") -> None:
+        self.path = path
         self.received_messages: list[list[Message]] = []
         self.received_tool_names: list[list[str]] = []
         self.close_called = False
@@ -52,7 +53,7 @@ class ScriptedToolCallingModel:
                     ToolCall(
                         id="call-read-report",
                         name="read_file",
-                        arguments={"path": "report.txt"},
+                        arguments={"path": self.path},
                     )
                 ],
             )
@@ -136,18 +137,26 @@ def build_recording_context(
     return context, events, checkpoints
 
 
+@pytest.mark.parametrize(
+    ("directory", "requested_path"),
+    [
+        ("workspace", "report.txt"),
+        ("uploads", "/mnt/user-data/uploads/report.txt"),
+    ],
+)
 def test_agent_loop_executes_real_tool_and_returns_result_to_model(
-    tmp_path: Path,
+    tmp_path: Path, directory: str, requested_path: str,
 ) -> None:
     """模型的工具调用应真实执行，结果必须进入下一轮模型消息。"""
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "report.txt").write_text(
+    for name in ("workspace", "uploads", "outputs"):
+        (tmp_path / name).mkdir()
+    (tmp_path / directory / "report.txt").write_text(
         "项目代号：青鹿-728。负责人：小明。",
         encoding="utf-8",
     )
 
-    model = ScriptedToolCallingModel()
+    model = ScriptedToolCallingModel(path=requested_path)
     registry, executor = build_registry_and_executor()
     context, events, checkpoints = build_recording_context(workspace)
     initial_state = ThreadState(
@@ -217,8 +226,10 @@ def test_reasoning_stream_shares_message_identity_and_preserves_tool_loop(tmp_pa
             return result
 
     async def scenario():
-        (tmp_path / "report.txt").write_text("项目代号：青鹿-728。负责人：小明。", encoding="utf-8")
-        context, events, checkpoints = build_recording_context(tmp_path)
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "report.txt").write_text("项目代号：青鹿-728。负责人：小明。", encoding="utf-8")
+        context, events, checkpoints = build_recording_context(workspace)
         registry, executor = build_registry_and_executor()
         agent = LeadAgent(ThinkingModel(), registry, executor, thinking_enabled=True)
         state = ThreadState(thread_id=context.thread_id, user_id=context.user_id,

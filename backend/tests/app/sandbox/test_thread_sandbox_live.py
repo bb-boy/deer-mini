@@ -34,6 +34,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def make_workspace(thread_dir: Path) -> Path:
+    """按照真实 Thread 的结构准备三个临时目录。"""
+    for name in ("workspace", "uploads", "outputs"):
+        (thread_dir / name).mkdir(parents=True)
+    return thread_dir / "workspace"
+
+
 def ctx(workspace, run="run-1", thread="thread-1"):
     return dict(user_id="sandbox-test", thread_id=thread, run_id=run, workspace_path=str(workspace))
 
@@ -47,6 +54,7 @@ async def execute(manager, context, command):
 
 
 def test_real_bash_inherits_host_clock_and_timezone(tmp_path):
+    workspace = make_workspace(tmp_path)
     if not Path("/etc/localtime").is_file():
         pytest.skip("当前宿主机没有 /etc/localtime 时区文件")
     host_timezone = subprocess.check_output(
@@ -67,7 +75,7 @@ def test_real_bash_inherits_host_clock_and_timezone(tmp_path):
         runner = DockerCommandRunner()
         started = time.time()
         check_result(await runner.run(
-            command=command, workspace_path=str(tmp_path),
+            command=command, workspace_path=str(workspace),
             run_id="timezone-direct", tool_call_id="time-check",
         ), started)
 
@@ -76,7 +84,7 @@ def test_real_bash_inherits_host_clock_and_timezone(tmp_path):
         container_ids = []
         try:
             for run_id in ("timezone-1", "timezone-2"):
-                context = ctx(tmp_path, run=run_id)
+                context = ctx(workspace, run=run_id)
                 await manager.begin_run(**context)
                 started = time.time()
                 check_result(await execute(manager, context, command), started)
@@ -95,13 +103,13 @@ def test_real_bash_inherits_host_clock_and_timezone(tmp_path):
 
 
 def test_real_reuse_isolation_recycling_and_persistent_workspace(tmp_path):
+    workspace = make_workspace(tmp_path)
     async def scenario():
         now = [0.0]
         runner = DockerCommandRunner(DockerRunnerConfig(idle_timeout_seconds=10))
         manager = ThreadSandboxManager(runner, scope=uuid4().hex, clock=lambda: now[0])
-        other_workspace = tmp_path / "other"
-        other_workspace.mkdir()
-        first = ctx(tmp_path)
+        other_workspace = make_workspace(tmp_path / "other")
+        first = ctx(workspace)
         key = (first["user_id"], first["thread_id"])
         await manager.start()
         try:
@@ -114,7 +122,7 @@ def test_real_reuse_isolation_recycling_and_persistent_workspace(tmp_path):
             assert await manager.reap_idle() == []
             await finish(manager, first)
 
-            second = ctx(tmp_path, run="run-2")
+            second = ctx(workspace, run="run-2")
             await manager.begin_run(**second)
             result = await execute(manager, second, "cat /tmp/session-marker; cat durable.txt")
             assert result.output == "keepsaved"
@@ -129,7 +137,7 @@ def test_real_reuse_isolation_recycling_and_persistent_workspace(tmp_path):
             now[0] = 110
             assert await manager.reap_idle() == [original]
             assert not await runner.container_is_running(original)
-            third = ctx(tmp_path, run="run-3")
+            third = ctx(workspace, run="run-3")
             await manager.begin_run(**third)
             result = await execute(manager, third, "test ! -e /tmp/session-marker && cat durable.txt")
             assert result.output == "saved"
@@ -144,10 +152,11 @@ def test_real_reuse_isolation_recycling_and_persistent_workspace(tmp_path):
 
 
 def test_real_timeout_and_cancellation_remove_container(tmp_path):
+    workspace = make_workspace(tmp_path)
     async def scenario():
         runner = DockerCommandRunner(DockerRunnerConfig(timeout_seconds=10))
         manager = ThreadSandboxManager(runner, scope=uuid4().hex)
-        context = ctx(tmp_path)
+        context = ctx(workspace)
         key = (context["user_id"], context["thread_id"])
         try:
             await manager.begin_run(**context)
@@ -162,7 +171,7 @@ def test_real_timeout_and_cancellation_remove_container(tmp_path):
             replacement = manager._active[key].container_id
             task = asyncio.create_task(execute(manager, context, "touch started; sleep 60"))
             async with asyncio.timeout(10):
-                while not (tmp_path / "started").exists():
+                while not (workspace / "started").exists():
                     await asyncio.sleep(0.02)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -177,6 +186,7 @@ def test_real_timeout_and_cancellation_remove_container(tmp_path):
 
 
 def test_startup_removes_only_own_orphaned_containers(tmp_path):
+    workspace = make_workspace(tmp_path)
     async def scenario():
         runner = DockerCommandRunner()
         scope = uuid4().hex
@@ -186,7 +196,7 @@ def test_startup_removes_only_own_orphaned_containers(tmp_path):
         try:
             for name, owner in [(own, scope), (unrelated, uuid4().hex)]:
                 await runner.start_container(
-                    container_name=name, workspace_path=str(tmp_path),
+                    container_name=name, workspace_path=str(workspace),
                     user_id="sandbox-test", thread_id=name, scope=owner,
                 )
             await manager.start()

@@ -1,6 +1,7 @@
 """DockerCommandRunner 的容器边界与进程生命周期测试。"""
 
 import asyncio
+import csv
 import os
 from pathlib import Path
 import textwrap
@@ -27,6 +28,13 @@ def make_config(**overrides) -> DockerRunnerConfig:
     }
     values.update(overrides)
     return DockerRunnerConfig(**values)
+
+
+def make_workspace(thread_dir: Path) -> Path:
+    """按照真实 Thread 的结构准备三个临时目录。"""
+    for name in ("workspace", "uploads", "outputs"):
+        (thread_dir / name).mkdir(parents=True)
+    return thread_dir / "workspace"
 
 
 def make_fake_docker(tmp_path: Path) -> Path:
@@ -73,9 +81,8 @@ def make_fake_docker(tmp_path: Path) -> Path:
     return executable
 
 
-def test_build_run_args_confines_command_to_current_workspace(tmp_path: Path):
-    workspace = tmp_path / "thread-1" / "workspace"
-    workspace.mkdir(parents=True)
+def test_build_run_args_mounts_current_thread_directories(tmp_path: Path):
+    workspace = make_workspace(tmp_path / "thread-1")
     runner = DockerCommandRunner(make_config())
 
     container_name, args = runner.build_run_args(
@@ -96,11 +103,16 @@ def test_build_run_args_confines_command_to_current_workspace(tmp_path: Path):
     assert args[args.index("--memory-swap") + 1] == str(512 * 1024**2)
     assert args[args.index("--cpus") + 1] == "1.0"
     assert args[args.index("--pids-limit") + 1] == "64"
-    assert args[args.index("--workdir") + 1] == "/workspace"
-    assert (
-        args[args.index("--mount") + 1]
-        == f'type=bind,"source={workspace.resolve()}",target=/workspace'
-    )
+    assert args[args.index("--workdir") + 1] == "/mnt/user-data/workspace"
+    mounts = [
+        next(csv.reader([args[index + 1]], strict=True))
+        for index, value in enumerate(args)
+        if value == "--mount"
+    ]
+    assert mounts[:3] == [
+        ["type=bind", f"source={workspace.parent / name}", f"target=/mnt/user-data/{name}"]
+        for name in ("workspace", "uploads", "outputs")
+    ]
     assert args[-3:] == ["/bin/bash", "-lc", "python analyse.py; printf done"]
 
     injected_env = [
@@ -109,7 +121,7 @@ def test_build_run_args_confines_command_to_current_workspace(tmp_path: Path):
         if value == "--env"
     ]
     assert injected_env[:3] == [
-        "HOME=/workspace",
+        "HOME=/mnt/user-data/workspace",
         "LANG=C.UTF-8",
         "PYTHONUNBUFFERED=1",
     ]
@@ -118,8 +130,7 @@ def test_build_run_args_confines_command_to_current_workspace(tmp_path: Path):
 
 
 def test_run_captures_nonzero_exit_code(tmp_path: Path, monkeypatch):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path)
     fake_docker = make_fake_docker(tmp_path)
     monkeypatch.setenv("FAKE_DOCKER_MODE", "error")
     runner = DockerCommandRunner(
@@ -141,8 +152,7 @@ def test_run_captures_nonzero_exit_code(tmp_path: Path, monkeypatch):
 
 
 def test_run_drains_but_bounds_large_output(tmp_path: Path, monkeypatch):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path)
     fake_docker = make_fake_docker(tmp_path)
     monkeypatch.setenv("FAKE_DOCKER_MODE", "large")
     runner = DockerCommandRunner(
@@ -168,8 +178,7 @@ def test_run_drains_but_bounds_large_output(tmp_path: Path, monkeypatch):
 
 
 def test_timeout_kills_container_and_returns_timeout(tmp_path: Path, monkeypatch):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path)
     fake_docker = make_fake_docker(tmp_path)
     log_path = tmp_path / "docker.log"
     monkeypatch.setenv("FAKE_DOCKER_MODE", "sleep")
@@ -200,8 +209,7 @@ def test_cancellation_kills_container_and_propagates_cancel(
     tmp_path: Path,
     monkeypatch,
 ):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path)
     fake_docker = make_fake_docker(tmp_path)
     log_path = tmp_path / "docker.log"
     monkeypatch.setenv("FAKE_DOCKER_MODE", "sleep")
@@ -236,8 +244,7 @@ def test_cancellation_kills_container_and_propagates_cancel(
 
 
 def test_cancel_while_starting_process_still_runs_cleanup(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path)
 
     class FakeProcess:
         def __init__(self):
@@ -283,8 +290,7 @@ def test_cancel_while_starting_process_still_runs_cleanup(tmp_path: Path):
 
 
 def test_cleanup_failure_is_reported(tmp_path: Path, monkeypatch):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path)
     fake_docker = make_fake_docker(tmp_path)
     monkeypatch.setenv("FAKE_DOCKER_MODE", "sleep")
     monkeypatch.setenv("FAKE_DOCKER_RM_FAIL", "1")
@@ -312,9 +318,9 @@ def test_invalid_memory_limit_is_rejected(memory_limit: str):
         DockerRunnerConfig(memory_limit=memory_limit)
 
 
-def test_workspace_path_with_comma_is_csv_quoted(tmp_path: Path):
-    workspace = tmp_path / "workspace,with-comma"
-    workspace.mkdir()
+@pytest.mark.parametrize("thread_name", ["thread,with-comma", 'thread"with-quote'])
+def test_thread_path_with_punctuation_is_csv_quoted(tmp_path: Path, thread_name: str):
+    workspace = make_workspace(tmp_path / thread_name)
 
     _, args = DockerCommandRunner(make_config()).build_run_args(
         command="pwd",
@@ -323,14 +329,16 @@ def test_workspace_path_with_comma_is_csv_quoted(tmp_path: Path):
         tool_call_id="call-1",
     )
 
-    assert args[args.index("--mount") + 1] == (
-        f'type=bind,"source={workspace.resolve()}",target=/workspace'
-    )
+    # 按 Docker 的 CSV 规则解析后，路径中的逗号和引号必须原样保留。
+    assert next(csv.reader([args[args.index("--mount") + 1]], strict=True)) == [
+        "type=bind",
+        f"source={workspace.resolve()}",
+        "target=/mnt/user-data/workspace",
+    ]
 
 
 def test_utf8_output_stays_within_byte_limit(tmp_path: Path, monkeypatch):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path)
     fake_docker = make_fake_docker(tmp_path)
     monkeypatch.setenv("FAKE_DOCKER_MODE", "utf8")
     runner = DockerCommandRunner(

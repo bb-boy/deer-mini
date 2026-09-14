@@ -7,6 +7,8 @@
 
 import asyncio
 
+import pytest
+
 from app.domain.messages import ToolCall
 from app.runtime import context
 from app.runtime.context import RuntimeContext
@@ -28,24 +30,34 @@ def test_read_file_tool_definition():
 
 
 
-def test_read_file_tool_execute(tmp_path):
+@pytest.mark.parametrize(
+    ("directory", "requested_path"),
+    [
+        ("workspace", "report.txt"),
+        ("workspace", "/mnt/user-data/workspace/report.txt"),
+        ("uploads", "/mnt/user-data/uploads/report.txt"),
+        ("outputs", "/mnt/user-data/outputs/report.txt"),
+    ],
+)
+def test_read_file_tool_execute(tmp_path, directory, requested_path):
     """
     测试 ReadFileTool 的 execute 方法是否能正确读取文件内容。
     """
 
 
-    workspace = tmp_path / "thread_001" / "workspace"
-    workspace.mkdir(parents=True)
+    thread_dir = tmp_path / "thread_001"
+    workspace = thread_dir / "workspace"
+    for name in ("workspace", "uploads", "outputs"):
+        (thread_dir / name).mkdir(parents=True)
 
-
-    report_path = workspace / "report.txt"
+    report_path = thread_dir / directory / "report.txt"
     report_content = "这是一个测试报告。"
     report_path.write_text(report_content, encoding="utf-8")
 
     call = ToolCall(
         id="call_001",
         name="read_file",
-        arguments={"path": "report.txt"}
+        arguments={"path": requested_path}
     )
 
 
@@ -72,7 +84,15 @@ def test_read_file_tool_execute(tmp_path):
     assert result.content == "这是一个测试报告。"
 
 
-def test_read_file_rejects_path_outside_current_workspace(tmp_path):
+@pytest.mark.parametrize(
+    "requested_path",
+    [
+        "../../thread_002/workspace/secret.txt",
+        "/mnt/user-data/workspace/../../thread_002/workspace/secret.txt",
+        "/mnt/user-data/workspace/escape.txt",
+    ],
+)
+def test_read_file_rejects_path_outside_current_workspace(tmp_path, requested_path):
     """
     即使模型试图使用 ../../ 越出当前 workspace，
     ReadFileTool 也必须拒绝读取其他 Thread 的文件。
@@ -90,12 +110,15 @@ def test_read_file_rejects_path_outside_current_workspace(tmp_path):
         encoding="utf-8",
     )
 
-    # 模型试图从 thread_001 向上返回，再进入 thread_002。
+    # 符号链接和 .. 都不能成为访问另一个 Thread 的入口。
+    (own_workspace / "escape.txt").symlink_to(other_workspace / "secret.txt")
+
+    # 模型试图从 thread_001 向上返回，或通过链接进入 thread_002。
     call = ToolCall(
         id="call_outside_001",
         name="read_file",
         arguments={
-            "path": "../../thread_002/workspace/secret.txt",
+            "path": requested_path,
         },
     )
 
@@ -114,5 +137,5 @@ def test_read_file_rejects_path_outside_current_workspace(tmp_path):
 
     # 必须失败，且绝不能把 secret.txt 的内容返回。
     assert result.is_error is True
-    assert "只能读取当前工作目录" in result.content
+    assert "超出了当前 Thread 的指定目录" in result.content
     assert "这是不应被读取的秘密" not in result.content

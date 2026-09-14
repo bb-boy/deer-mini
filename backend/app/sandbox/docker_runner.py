@@ -11,16 +11,23 @@ import re
 import signal
 from uuid import uuid4
 
+from app.filesystem.thread_paths import ThreadPaths, VIRTUAL_WORKSPACE
 from app.sandbox.base import CommandResult
 
-
+#定义一个正则对象，用来匹配不是a-z0-9_.-的字符
 _SAFE_NAME_PART = re.compile(r"[^a-z0-9_.-]+")
+
+#规定了一些字符串集合，用来表示布尔值的真和假
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
+
+#定义一个正则对象，用来匹配内存限制的格式，例如 512m、1g 等，"512m"拆成number=512, unit=m
 _MEMORY_RE = re.compile(
     r"^(?P<number>[0-9]+(?:\.[0-9]+)?)\s*(?P<unit>[kmgt]?i?b?)?$",
     re.IGNORECASE,
 )
+
+#定义单位的大小
 _MEMORY_UNITS = {
     "": 1,
     "b": 1,
@@ -41,6 +48,9 @@ _MEMORY_UNITS = {
     "ti": 1024**4,
     "tib": 1024**4,
 }
+
+
+#定义最小的memory为 6 MiB
 _MIN_MEMORY_BYTES = 6 * 1024**2
 logger = logging.getLogger(__name__)
 
@@ -50,6 +60,14 @@ class SandboxCleanupError(RuntimeError):
 
 
 def _parse_memory_limit(value: str) -> int:
+    """
+    解析 Docker 内存限制的字符串表示。
+    :param value: 内存限制的字符串表示，例如 "512m"。
+    :return: 内存限制的字节数,
+    :raises ValueError: 当输入的字符串格式不正确时。
+    """
+
+
     match = _MEMORY_RE.fullmatch(value.strip())
     if match is None:
         raise ValueError("Docker 内存限制格式无效")
@@ -189,19 +207,31 @@ class DockerCommandRunner:
         tool_call_id: str,
     ) -> tuple[str, list[str]]:
         """构造 argv；模型命令只作为容器内 Bash 的一个独立参数。"""
-        workspace = Path(workspace_path).resolve(strict=True)
-        if not workspace.is_dir():
-            raise ValueError("Thread Workspace 不是目录")
+        # Runtime 传入服务器上的 workspace；由它定位同一 Thread 的三个目录。
+        paths = ThreadPaths(Path(workspace_path).parent)
+        workspace = paths.workspace_path.resolve(strict=True)
+        if workspace != Path(workspace_path).resolve(strict=True):
+            raise ValueError("workspace_path 必须指向 Thread 的 workspace 目录")
 
         container_name = (
             f"deer-mini-{self._name_part(run_id)}-"
             f"{self._name_part(tool_call_id)}-{uuid4().hex[:8]}"
         )
         stat = workspace.stat()
-        # Docker --mount 使用 CSV 解析。把整个 source=... 字段加引号，
-        # 并按 CSV 规则把路径中的双引号写成两个双引号。
-        source_field = f"source={workspace}".replace('"', '""')
-        mount_spec = f'type=bind,"{source_field}",target=/workspace'
+        # 三个目录分别挂到同一个容器；每组对应一个 --mount 参数。
+        mount_args: list[str] = []
+        for host_path, virtual_path in paths.mount_pairs():
+            if not host_path.is_dir():
+                raise ValueError(
+                    f"Thread 标准目录不存在或不是目录：{host_path.name}"
+                )
+
+            # Docker 按 CSV 解析：包住完整 source 字段，并转义其中的双引号。
+            source_field = f"source={host_path}".replace('"', '""')
+            mount_args.extend([
+                "--mount",
+                f'type=bind,"{source_field}",target={virtual_path}',
+            ])
         network_mode = "bridge" if self.config.network_enabled else "none"
         args = [
             self.config.docker_binary,
@@ -229,16 +259,15 @@ class DockerCommandRunner:
             "--user",
             f"{stat.st_uid}:{stat.st_gid}",
             "--workdir",
-            "/workspace",
-            "--mount",
-            mount_spec,
+            VIRTUAL_WORKSPACE,
             "--env",
-            "HOME=/workspace",
+            f"HOME={VIRTUAL_WORKSPACE}",
             "--env",
             "LANG=C.UTF-8",
             "--env",
             "PYTHONUNBUFFERED=1",
         ]
+        args.extend(mount_args)
         # 容器共用宿主机时钟；只读共享时区文件，让 date 等程序也按宿主机时区显示。
         # TZ 指向该文件，避免镜像自带的 UTC 设置覆盖宿主机配置。
         if Path("/etc/localtime").is_file():
@@ -305,8 +334,9 @@ class DockerCommandRunner:
     async def run_in_container(
         self, *, container_name: str, command: str
     ) -> CommandResult:
+        # 每条命令启动独立 Bash，始终从同一个虚拟工作目录开始。
         return await self._run_process(container_name, [
-            self.config.docker_binary, "exec", "--workdir", "/workspace",
+            self.config.docker_binary, "exec", "--workdir", VIRTUAL_WORKSPACE,
             container_name, "/bin/bash", "-lc", command,
         ])
 

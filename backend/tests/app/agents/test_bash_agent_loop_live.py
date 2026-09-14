@@ -27,6 +27,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def make_workspace(thread_dir: Path) -> Path:
+    """按照真实 Thread 的结构准备三个临时目录。"""
+    for name in ("workspace", "uploads", "outputs"):
+        (thread_dir / name).mkdir(parents=True)
+    return thread_dir / "workspace"
+
+
 class RecordingNameRunner(DockerCommandRunner):
     """记录随机容器名，供测试确认超时清理完成。"""
 
@@ -111,8 +118,8 @@ class ScriptedBashModel:
                         arguments={
                             "description": "创建结果文件并读取内容",
                             "command": (
-                                "printf 'docker-agent-728' > result.txt "
-                                "&& cat result.txt"
+                                "cp ../uploads/input.txt ../outputs/result.txt "
+                                "&& cat ../outputs/result.txt"
                             ),
                         },
                     )
@@ -128,8 +135,8 @@ class ScriptedBashModel:
 
 
 def test_agent_loop_returns_real_docker_output_to_model(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace,with-comma"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path / "thread,with-comma")
+    (workspace.parent / "uploads" / "input.txt").write_text("docker-agent-728")
     context = _build_context(workspace)
     model = ScriptedBashModel()
     state = ThreadState(
@@ -141,7 +148,7 @@ def test_agent_loop_returns_real_docker_output_to_model(tmp_path: Path) -> None:
 
     final_state = asyncio.run(_build_bash_agent(model).run(state, context))
 
-    assert (workspace / "result.txt").read_text() == "docker-agent-728"
+    assert (workspace.parent / "outputs" / "result.txt").read_text() == "docker-agent-728"
     assert [message.role for message in final_state.messages] == [
         "user",
         "assistant",
@@ -154,8 +161,7 @@ def test_agent_loop_returns_real_docker_output_to_model(tmp_path: Path) -> None:
 
 
 def test_real_docker_timeout_removes_container(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path)
     runner = RecordingNameRunner(
         DockerRunnerConfig(timeout_seconds=0.5, network_enabled=False)
     )
@@ -189,8 +195,7 @@ def test_real_docker_timeout_removes_container(tmp_path: Path) -> None:
 
 
 def test_real_docker_cancel_removes_container(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path)
     runner = RecordingNameRunner(
         DockerRunnerConfig(timeout_seconds=20, network_enabled=False)
     )
@@ -245,8 +250,7 @@ def test_real_docker_cancel_removes_container(tmp_path: Path) -> None:
 )
 def test_live_model_can_choose_real_docker_bash(tmp_path: Path) -> None:
     """真实模型必须选择 Bash，并依据真实容器结果回答。"""
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace = make_workspace(tmp_path)
     context = _build_context(workspace)
     state = ThreadState(
         thread_id=context.thread_id,

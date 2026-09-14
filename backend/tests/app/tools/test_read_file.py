@@ -34,6 +34,9 @@ def test_read_file_tool_definition():
     ("directory", "requested_path"),
     [
         ("workspace", "report.txt"),
+        ("workspace", "workspace/report.txt"),
+        ("uploads", "uploads/report.txt"),
+        ("outputs", "outputs/report.txt"),
         ("workspace", "/mnt/user-data/workspace/report.txt"),
         ("uploads", "/mnt/user-data/uploads/report.txt"),
         ("outputs", "/mnt/user-data/outputs/report.txt"),
@@ -88,6 +91,8 @@ def test_read_file_tool_execute(tmp_path, directory, requested_path):
     "requested_path",
     [
         "../../thread_002/workspace/secret.txt",
+        "uploads/../../thread_002/workspace/secret.txt",
+        "uploads/../workspace/escape.txt",
         "/mnt/user-data/workspace/../../thread_002/workspace/secret.txt",
         "/mnt/user-data/workspace/escape.txt",
     ],

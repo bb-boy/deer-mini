@@ -2,6 +2,7 @@ import {
   type CSSProperties,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -89,6 +90,12 @@ export default function App() {
   const userRequestGenerationRef = useRef(0);
   const threadRequestGenerationRef = useRef(0);
   const messageRequestGenerationRef = useRef(0);
+  const fileSelectionRef = useRef({ userId, threadId: selectedThreadId });
+  useLayoutEffect(() => {
+    // 新对话显示前清空旧卡片，避免旧文件名配上新对话的下载地址。
+    fileSelectionRef.current = { userId, threadId: selectedThreadId };
+    setFiles([]);
+  }, [userId, selectedThreadId]);
   useEffect(() => {
     let cancelled = false;
     let generation = 0;
@@ -559,15 +566,25 @@ export default function App() {
   }
   async function handleUpload(file: File) {
     if (!selectedThread) return;
+    const uploadThreadId = selectedThread.id;
+    const uploadUserId = userId;
+    // 上传期间可以切换对话；请求回来时，只刷新它所属的当前对话。
+    const isCurrentThread = () =>
+      fileSelectionRef.current.threadId === uploadThreadId &&
+      fileSelectionRef.current.userId === uploadUserId;
     setContextTab("files");
     setContextPanelOpen(true);
     setUploading(true);
     setPageError(null);
     try {
-      await uploadWorkspaceFile(selectedThread.id, userId, file);
-      setFiles(await listWorkspaceFiles(selectedThread.id, userId));
+      await uploadWorkspaceFile(uploadThreadId, uploadUserId, file);
+      if (!isCurrentThread()) return;
+      const nextFiles = await listWorkspaceFiles(uploadThreadId, uploadUserId);
+      if (isCurrentThread()) setFiles(nextFiles);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "上传文件失败");
+      if (isCurrentThread()) {
+        setPageError(error instanceof Error ? error.message : "上传文件失败");
+      }
     } finally {
       setUploading(false);
     }

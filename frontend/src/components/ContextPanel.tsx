@@ -124,7 +124,7 @@ export function ContextPanel({
           <TabButton active={tab === "history"} icon="clock" label="历史" onClick={() => onTabChange("history")} />
         </div>
         {tab === "activity" && <RunTimeline events={toolEvents} />}
-        {tab === "files" && <WorkspaceFiles files={files} disabled={!selectedThread || uploading} downloadUrl={downloadUrl} onUpload={onUpload} />}
+        {tab === "files" && <WorkspaceFiles key={selectedThread?.id ?? "empty"} files={files} disabled={!selectedThread || uploading} downloadUrl={downloadUrl} onUpload={onUpload} />}
         {tab === "history" && <HistoryPanel runs={runs} />}
         {!selectedThread && tab === "files" ? <p className="panel-footnote">选择一个对话后，才能管理它的 Workspace。</p> : null}
       </div>

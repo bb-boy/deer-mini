@@ -32,7 +32,8 @@ class ReadFileTool:
                 "path": {
                     "type": "string",
                     "description": (
-                        "文件虚拟绝对路径，例如 "
+                        "带区域前缀的路径，例如 uploads/资料.txt、outputs/report.md、"
+                        "workspace/script.py；也支持文件虚拟绝对路径，例如 "
                         "/mnt/user-data/uploads/report.txt。"
                         "也兼容 workspace 内的相对路径，例如 report.txt。"
                     ),

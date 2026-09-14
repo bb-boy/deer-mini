@@ -1,12 +1,14 @@
 """安全读写一个 Thread Workspace 中的普通文件。"""
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import os
 from pathlib import Path
 import stat
 import tempfile
+
+from app.filesystem.thread_paths import ThreadPaths
 
 
 DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -55,8 +57,10 @@ class WorkspaceFileService:
         filename: str,
         chunks: AsyncIterator[bytes],
     ) -> WorkspaceFile:
-        """分块写入上传内容，完整写完后才替换 Workspace 中的目标文件。"""
-        workspace = self._resolve_workspace(workspace_path)
+        """输入当前 Thread 的 workspace 和上传数据；文件落入旁边的 uploads。"""
+        paths = self._thread_paths(workspace_path)
+        workspace = paths.uploads_path
+        workspace.mkdir(exist_ok=True)
         safe_name = self._validate_upload_filename(filename)
         destination = workspace / safe_name
         self._validate_upload_destination(destination)
@@ -87,9 +91,27 @@ class WorkspaceFileService:
             staging_path.unlink(missing_ok=True)
             raise
 
-        return self._to_workspace_file(workspace, destination)
+        stored = self._to_workspace_file(workspace, destination)
+        return replace(stored, relative_path=f"uploads/{stored.relative_path}")
 
     def list_files(self, workspace_path: str) -> list[WorkspaceFile]:
+        """列出三个文件区，返回带区域前缀的展示/下载路径；不修改文件。"""
+        paths = self._thread_paths(workspace_path)
+        files = []
+        for root, _ in paths.mount_pairs():
+            if not root.exists():
+                continue
+            for item in self._list_directory(str(root)):
+                relative_path = f"{root.name}/{item.relative_path}"
+                # 列表和下载使用相同规则，不展示任何符号链接入口。
+                try:
+                    paths.resolve_agent_path(relative_path)
+                except (ValueError, OSError):
+                    continue
+                files.append(replace(item, relative_path=relative_path))
+        return sorted(files, key=lambda item: item.relative_path)
+
+    def _list_directory(self, workspace_path: str) -> list[WorkspaceFile]:
         """递归列出 Workspace 内的普通文件，不跟随符号链接。"""
         workspace = self._resolve_workspace(workspace_path)
         files: list[WorkspaceFile] = []
@@ -112,8 +134,7 @@ class WorkspaceFileService:
         return sorted(files, key=lambda item: item.relative_path)
 
     def resolve_download(self, workspace_path: str, relative_path: str) -> Path:
-        """返回经过边界检查的下载文件绝对路径。"""
-        workspace = self._resolve_workspace(workspace_path)
+        """区域前缀路径定位附件/产物；无前缀旧链接仍定位 workspace。"""
         if not relative_path or "\x00" in relative_path or "\\" in relative_path:
             raise UnsafeWorkspacePathError("文件路径不安全")
 
@@ -121,16 +142,11 @@ class WorkspaceFileService:
         if requested.is_absolute():
             raise UnsafeWorkspacePathError("只能下载当前 Workspace 中的文件")
 
-        unresolved = workspace / requested
-        if unresolved.is_symlink():
-            raise UnsafeWorkspacePathError("不能下载符号链接")
-
         try:
-            target = unresolved.resolve(strict=True)
-            target.relative_to(workspace)
+            target = self._thread_paths(workspace_path).resolve_agent_path(relative_path)
         except FileNotFoundError:
             raise
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, RuntimeError) as error:
             raise UnsafeWorkspacePathError(
                 "只能下载当前 Workspace 中的文件"
             ) from error
@@ -138,6 +154,14 @@ class WorkspaceFileService:
         if not target.is_file():
             raise FileNotFoundError(relative_path)
         return target
+
+    @staticmethod
+    def _thread_paths(workspace_path: str) -> ThreadPaths:
+        """只信任数据库中当前 Thread 的目录，不接收浏览器提供的服务器路径。"""
+        try:
+            return ThreadPaths(Path(workspace_path).parent)
+        except (ValueError, OSError, RuntimeError) as error:
+            raise UnsafeWorkspacePathError("Thread 文件目录不安全") from error
 
     @staticmethod
     def _resolve_workspace(workspace_path: str) -> Path:

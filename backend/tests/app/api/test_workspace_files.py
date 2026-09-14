@@ -21,6 +21,8 @@ def workspace_client(tmp_path, monkeypatch):
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    (tmp_path / "uploads").mkdir()
+    (tmp_path / "outputs").mkdir()
     thread = Thread(
         id="files-thread",
         user_id="alice",
@@ -48,21 +50,22 @@ def test_upload_list_and_download_workspace_file(workspace_client):
         params={"user_id": "alice"},
     )
     downloaded = client.get(
-        "/api/threads/files-thread/files/report.txt",
+        "/api/threads/files-thread/files/uploads/report.txt",
         params={"user_id": "alice"},
     )
 
     assert uploaded.status_code == 201
-    assert uploaded.json()["relative_path"] == "report.txt"
-    assert (workspace / "report.txt").read_bytes() == b"deer mini report"
-    assert [item["relative_path"] for item in listing.json()] == ["report.txt"]
+    assert uploaded.json()["relative_path"] == "uploads/report.txt"
+    assert (workspace.parent / "uploads/report.txt").read_bytes() == b"deer mini report"
+    assert not (workspace / "report.txt").exists()
+    assert [item["relative_path"] for item in listing.json()] == ["uploads/report.txt"]
     assert downloaded.status_code == 200
     assert downloaded.content == b"deer mini report"
 
 
 def test_list_and_download_nested_agent_output(workspace_client):
     client, workspace = workspace_client
-    output = workspace / "outputs" / "result.txt"
+    output = workspace.parent / "outputs" / "nested" / "result.txt"
     output.parent.mkdir()
     output.write_text("agent result", encoding="utf-8")
 
@@ -71,13 +74,13 @@ def test_list_and_download_nested_agent_output(workspace_client):
         params={"user_id": "alice"},
     )
     downloaded = client.get(
-        "/api/threads/files-thread/files/outputs/result.txt",
+        "/api/threads/files-thread/files/outputs/nested/result.txt",
         params={"user_id": "alice"},
     )
 
     assert listing.status_code == 200
     assert [item["relative_path"] for item in listing.json()] == [
-        "outputs/result.txt"
+        "outputs/nested/result.txt"
     ]
     assert downloaded.status_code == 200
     assert downloaded.text == "agent result"
@@ -145,5 +148,46 @@ def test_upload_too_large_returns_413_without_partial_file(workspace_client):
     )
 
     assert response.status_code == 413
-    assert not (workspace / "large.bin").exists()
-    assert list(workspace.glob(".upload-*.part")) == []
+    assert not (workspace.parent / "uploads/large.bin").exists()
+    assert list((workspace.parent / "uploads").glob(".upload-*.part")) == []
+
+
+def test_legacy_workspace_file_and_reserved_subdirectory_still_accessible(workspace_client):
+    client, workspace = workspace_client
+    (workspace / "old.txt").write_text("old upload")
+    (workspace / "outputs").mkdir()
+    (workspace / "outputs/old.txt").write_text("old output")
+    for path, expected in [("old.txt", "old upload"), ("workspace/outputs/old.txt", "old output")]:
+        response = client.get(f"/api/threads/files-thread/files/{path}", params={"user_id": "alice"})
+        assert response.status_code == 200
+        assert response.text == expected
+
+
+@pytest.mark.parametrize("area", ["uploads", "outputs", "workspace"])
+def test_download_refuses_symlink_directory(workspace_client, tmp_path, area):
+    client, workspace = workspace_client
+    outside = tmp_path / "private"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("private data")
+    (workspace.parent / area / "link").symlink_to(outside, target_is_directory=True)
+    response = client.get(f"/api/threads/files-thread/files/{area}/link/secret.txt", params={"user_id": "alice"})
+    assert response.status_code == 400
+    assert "private data" not in response.text
+
+
+def test_upload_then_real_read_file(workspace_client):
+    import asyncio
+    from app.domain.messages import ToolCall
+    from app.runtime.context import RuntimeContext
+    from app.tools.read_file import ReadFileTool
+
+    client, workspace = workspace_client
+    response = client.post("/api/threads/files-thread/files", params={"user_id": "alice"},
+                           files={"file": ("资料.txt", "真实附件内容".encode(), "text/plain")})
+    assert response.status_code == 201
+    call = ToolCall(id="read-upload", name="read_file", arguments={"path": response.json()["relative_path"]})
+    context = RuntimeContext(user_id="alice", thread_id="files-thread", run_id="test-run",
+                             workspace_path=str(workspace), record_event=None, save_checkpoint=None)
+    result = asyncio.run(ReadFileTool().execute(call, context))
+    assert not result.is_error
+    assert result.content == "真实附件内容"

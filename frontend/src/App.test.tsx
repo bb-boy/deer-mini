@@ -10,6 +10,7 @@ const createThreadMock = vi.fn();
 const getLatestStateMock = vi.fn();
 const listRunsMock = vi.fn();
 const listWorkspaceFilesMock = vi.fn();
+const uploadWorkspaceFileMock = vi.fn();
 const startAgentRunMock = vi.fn();
 const renameThreadMock = vi.fn();
 const deleteThreadMock = vi.fn();
@@ -25,7 +26,7 @@ vi.mock("./api/client", () => ({
   listWorkspaceFiles: (...args: unknown[]) => listWorkspaceFilesMock(...args),
   renameThread: (...args: unknown[]) => renameThreadMock(...args),
   deleteThread: (...args: unknown[]) => deleteThreadMock(...args),
-  uploadWorkspaceFile: vi.fn(),
+  uploadWorkspaceFile: (...args: unknown[]) => uploadWorkspaceFileMock(...args),
   workspaceFileDownloadUrl: vi.fn(() => "/download"),
 }));
 
@@ -88,6 +89,7 @@ const checkpoint: Checkpoint = {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   getModelsMock.mockReset().mockResolvedValue({
     default_model: "ustc-deepseek-flash",
     models: [
@@ -100,12 +102,60 @@ beforeEach(() => {
   getLatestStateMock.mockReset().mockResolvedValue(checkpoint);
   listRunsMock.mockReset().mockResolvedValue([]);
   listWorkspaceFilesMock.mockReset().mockResolvedValue([]);
+  uploadWorkspaceFileMock.mockReset().mockResolvedValue(undefined);
   startAgentRunMock.mockReset().mockResolvedValue(undefined);
   renameThreadMock.mockReset();
   deleteThreadMock.mockReset();
 });
 
 describe("App", () => {
+  it("clears the previous thread's file cards while the next thread loads", async () => {
+    const otherThread = { ...thread, id: "thread-2", title: "另一段对话" };
+    const oldFile = { name: "previous.txt", relative_path: "uploads/previous.txt", size: 8, modified_at: thread.updated_at };
+    let releaseFiles!: (files: WorkspaceFile[]) => void;
+    listThreadsMock.mockResolvedValue([thread, otherThread]);
+    listWorkspaceFilesMock.mockImplementation((threadId: string) => threadId === thread.id
+      ? Promise.resolve([oldFile])
+      : new Promise<WorkspaceFile[]>((resolve) => { releaseFiles = resolve; }));
+    render(<App />);
+    await screen.findByText("历史回答");
+    fireEvent.click(screen.getByRole("tab", { name: /文件/, hidden: true }));
+    expect(screen.getByRole("button", { name: "预览 previous.txt", hidden: true })).toBeTruthy();
+
+    // B 的文件请求尚未返回时，不能把 A 的卡片配上 B 的下载地址。
+    fireEvent.click(screen.getByRole("button", { name: /另一段对话/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /文件/, hidden: true }));
+    const staleCard = screen.queryByRole("button", { name: "预览 previous.txt", hidden: true });
+    await act(async () => { releaseFiles([]); });
+    expect(staleCard).toBeNull();
+  });
+
+  it("keeps the current thread's files when a previous thread's upload finishes late", async () => {
+    const otherThread = { ...thread, id: "thread-2", title: "另一段对话" };
+    const uploaded = { name: "old-upload.txt", relative_path: "uploads/old-upload.txt", size: 8, modified_at: thread.updated_at };
+    const currentFile = { name: "current.txt", relative_path: "outputs/current.txt", size: 8, modified_at: thread.updated_at };
+    let releaseUpload!: (file: WorkspaceFile) => void;
+    listThreadsMock.mockResolvedValue([thread, otherThread]);
+    listWorkspaceFilesMock.mockImplementation((threadId: string) => Promise.resolve(threadId === thread.id ? [] : [currentFile]));
+    uploadWorkspaceFileMock.mockImplementation(() => new Promise<WorkspaceFile>((resolve) => { releaseUpload = resolve; }));
+    render(<App />);
+    await screen.findByText("历史回答");
+    fireEvent.click(screen.getByRole("tab", { name: /文件/, hidden: true }));
+    fireEvent.change(screen.getByLabelText("上传文件"), { target: { files: [new File(["original"], uploaded.name)] } });
+    expect(uploadWorkspaceFileMock).toHaveBeenCalledWith(thread.id, thread.user_id, expect.any(File));
+
+    // 上传 A 时切到 B；即使 A 后来成功，也只能更新 A 的文件。
+    fireEvent.click(screen.getByRole("button", { name: /另一段对话/ }));
+    await waitFor(() => expect(listWorkspaceFilesMock).toHaveBeenCalledWith(otherThread.id, thread.user_id));
+    fireEvent.click(screen.getByRole("tab", { name: /文件/, hidden: true }));
+    await screen.findByRole("button", { name: "预览 current.txt", hidden: true });
+    listWorkspaceFilesMock.mockImplementation((threadId: string) => Promise.resolve(threadId === thread.id ? [uploaded] : [currentFile]));
+    await act(async () => { releaseUpload(uploaded); });
+
+    expect(screen.queryByRole("button", { name: "预览 old-upload.txt", hidden: true })).toBeNull();
+    expect(screen.getByRole("button", { name: "预览 current.txt", hidden: true })).toBeTruthy();
+  });
+
   it("refreshes backend model defaults when returning to the page", async () => {
     render(<App />);
     await screen.findByRole("option", { name: "默认 · USTC Flash" });

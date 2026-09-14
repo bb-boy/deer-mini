@@ -25,6 +25,8 @@ describe("WorkspaceFiles", () => {
 
     const link = screen.getByRole("link", { name: /report.txt/ });
     expect(link.getAttribute("href")).toBe("/download/outputs/report.txt");
+    expect(screen.getByRole("region", { name: "生成结果" }).contains(link)).toBe(true);
+    expect(screen.getByRole("button", { name: "预览 report.txt" })).toBeTruthy();
 
     const file = new File(["hello"], "hello.txt", { type: "text/plain" });
     fireEvent.change(screen.getByLabelText("上传文件"), {

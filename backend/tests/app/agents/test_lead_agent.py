@@ -141,6 +141,7 @@ def build_recording_context(
     ("directory", "requested_path"),
     [
         ("workspace", "report.txt"),
+        ("uploads", "uploads/report.txt"),
         ("uploads", "/mnt/user-data/uploads/report.txt"),
     ],
 )

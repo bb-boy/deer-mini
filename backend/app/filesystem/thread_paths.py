@@ -45,6 +45,8 @@ class ThreadPaths:
 
         # 先按 Linux 路径格式分析模型的地址，不直接访问这个地址。
         requested = PurePosixPath(raw_path)
+        if ".." in requested.parts:
+            raise ValueError("文件路径超出了当前 Thread 的指定目录：不允许 ..")
 
         if requested.is_absolute():
             try:
@@ -62,12 +64,23 @@ class ThreadPaths:
 
             name = relative.parts[0]
             remaining = relative.relative_to(name)
+        elif requested.parts and requested.parts[0] in self._roots:
+            # uploads/资料.txt 明确指向附件区，不再在多个目录里猜测。
+            name = requested.parts[0]
+            remaining = requested.relative_to(name)
         else:
             # 兼容原来的 read_file("report.txt")。
             name = "workspace"
             remaining = requested
 
         base = self._roots[name]
+
+        # 每次使用时重新检查；标准目录和中间目录也不能是符号链接。
+        current = base
+        for part in ("", *remaining.parts):
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("文件路径超出了当前 Thread 的指定目录：不允许符号链接")
 
         # 解析 .. 和已有符号链接，再检查最终位置。
         target = (base / remaining).resolve()

@@ -285,7 +285,7 @@ async def upload_workspace_file(
     file: UploadFile = File(...),
     user_id: str = Query(min_length=1),
 ) -> WorkspaceFileResponse:
-    """把浏览器上传的一个文件保存到当前 Thread Workspace。"""
+    """把浏览器上传的文件保存到当前 Thread 的 uploads。"""
     thread = _require_owned_thread(thread_id, user_id)
 
     async def chunks() -> AsyncIterator[bytes]:
@@ -327,10 +327,12 @@ def list_workspace_files(
     thread_id: str,
     user_id: str = Query(min_length=1),
 ) -> list[WorkspaceFileResponse]:
-    """列出当前 Thread Workspace 中的普通文件。"""
+    """列出当前 Thread 的上传资料、工作文件和生成结果。"""
     thread = _require_owned_thread(thread_id, user_id)
     try:
         files = WorkspaceFileService().list_files(thread.workspace_path)
+    except UnsafeWorkspacePathError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except FileNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

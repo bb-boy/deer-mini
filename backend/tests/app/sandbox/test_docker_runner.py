@@ -175,6 +175,12 @@ def test_run_drains_but_bounds_large_output(tmp_path: Path, monkeypatch):
     assert result.output_truncated is True
     assert len(result.output.encode("utf-8")) <= 160
     assert "output truncated" in result.output
+    assert result.full_output_path is not None
+    path = Path(result.full_output_path)
+    try:
+        assert path.read_bytes() == b"A" * 2000 + b"\n"
+    finally:
+        path.unlink()
 
 
 def test_timeout_kills_container_and_returns_timeout(tmp_path: Path, monkeypatch):

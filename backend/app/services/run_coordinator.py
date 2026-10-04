@@ -8,10 +8,13 @@ from typing import cast
 
 from app.agents.prompts.builder import apply_prompt_template
 from app.agents.lead_agent import LeadAgent
+from app.agents.todo_middleware import TodoMiddleware
+from app.agents.middleware_stack import build_runtime_middlewares
 from app.agents.workspace_context_middleware import WorkspaceContextMiddleware
 from app.domain.runs import Run
 from app.domain.threads import ThreadState
 from app.model.factory import ModelFactory
+from app.model.errors import ModelCallError
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.async_io import run_sync
 from app.runtime.event_recorder import EventRecorder
@@ -27,10 +30,16 @@ from app.services.thread_service import (
     ThreadService,
     cleanup_pending_thread_deletions,
 )
+from app.subagents.middleware import SubagentMiddleware
 from app.tools.bash import BashTool
 from app.tools.executor import ToolExecutor
-from app.tools.read_file import ReadFileTool
+from app.tools.read_file_rewrite import ReadFileTool
+from app.tools.read_tool_result import ReadToolResultTool
 from app.tools.registry import ToolRegistry
+from app.tools.task import TaskTool
+from app.tools.web_search import WebSearchTool
+from app.tools.web_fetch import WebFetchTool
+from app.tools.write_todos import WriteTodosTool
 
 
 logger = logging.getLogger(__name__)
@@ -102,8 +111,16 @@ class RunCoordinator:
         """创建一次 Run 使用的工具表，避免在不同入口重复开关逻辑。"""
         registry = ToolRegistry()
         registry.register(ReadFileTool())
+        registry.register(ReadToolResultTool())
         if self._bash_runner is not None:
             registry.register(BashTool(self._bash_runner))
+        # 搜索与网页读取共用后台密钥；未配置时不向模型暴露这两个工具。
+        tavily_api_key = os.getenv("TAVILY_API_KEY", "").strip()
+        if tavily_api_key:
+            registry.register(WebSearchTool(tavily_api_key))
+            registry.register(WebFetchTool(tavily_api_key))
+        registry.register(TaskTool())
+        registry.register(WriteTodosTool())
         return registry
 
     async def create_and_start_run(
@@ -121,11 +138,20 @@ class RunCoordinator:
 
         模型客户端先于 Run 创建，以便配置错误不会留下无法执行的 Run。
         """
-        model = ModelFactory(model_name).create_chat_model()
+        model_factory = ModelFactory(model_name)
+        model = model_factory.create_chat_model()
 
         try:
             registry = self._build_tool_registry()
-            system_prompt = await asyncio.to_thread(apply_prompt_template)
+            task_tool = registry.get("task")
+            assert isinstance(task_tool, TaskTool)
+            todo_tool = registry.get("write_todos")
+            assert isinstance(todo_tool, WriteTodosTool)
+            system_prompt = await asyncio.to_thread(
+                apply_prompt_template,
+                web_search_enabled=registry.get("web_search") is not None,
+                subagent_enabled=True,
+            )
             agent = LeadAgent(
                 model=model,
                 tool_registry=registry,
@@ -133,7 +159,14 @@ class RunCoordinator:
                 thinking_enabled=thinking_enabled,
                 reasoning_effort=reasoning_effort,
                 system_prompt=system_prompt,
-                middlewares=[WorkspaceContextMiddleware(registry)],
+                middlewares=build_runtime_middlewares([
+                    WorkspaceContextMiddleware(registry),
+                    TodoMiddleware(todo_tool),
+                    SubagentMiddleware(
+                        task_tool, registry, model_factory.create_chat_model,
+                        thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort,
+                    ),
+                ]),
             )
             run = self._run_service.create_run(
                 user_id=user_id,
@@ -347,6 +380,11 @@ class RunCoordinator:
             return
 
         error = task.exception()
+        if isinstance(error, ModelCallError):
+            # 不打印 cause 链：供应商异常正文可能包含请求内容或配置。
+            logger.error("Agent 模型请求失败 run=%s reason=%s attempts=%s status=%s",
+                run_id, error.reason, error.attempts, error.status_code)
+            return
         if isinstance(error, TimeoutError):
             logger.info("Agent Run 已自动超时：%s", run_id)
             return

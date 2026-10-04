@@ -6,7 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.messages import Role
 from app.domain.runs import RunStatus
+from app.domain.subagents import SubagentStatus
 from app.domain.threads import ThreadStatus
+from app.domain.todos import TodoStatus
 from app.model.config import DEFAULT_MODEL_NAME
 
 
@@ -104,6 +106,37 @@ class MessageResponse(BaseModel):
     tool_calls: list[ToolCallResponse]
     tool_call_id: str | None
     reasoning_content: str | None
+    is_error: bool = False
+    tool_result_file: str | None = None
+    tool_result_chars: int | None = None
+
+
+class SubagentTaskResponse(BaseModel):
+    """快照查询中的子任务工作单，保留独立消息与主任务归属。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: str
+    tool_call_id: str
+    user_id: str
+    thread_id: str
+    run_id: str
+    description: str
+    prompt: str
+    subagent_type: str
+    status: SubagentStatus
+    messages: list[MessageResponse]
+    result: str | None
+    error: str | None
+
+
+class TodoItemResponse(BaseModel):
+    """已确认保存的一项工作及其进度。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    content: str
+    status: TodoStatus
 
 
 class ThreadStateResponse(BaseModel):
@@ -115,6 +148,10 @@ class ThreadStateResponse(BaseModel):
     user_id: str
     messages: list[MessageResponse]
     workspace_path: str | None
+    subtasks: dict[str, SubagentTaskResponse] = Field(default_factory=dict)
+    todos: list[TodoItemResponse] = Field(default_factory=list)
+    todos_run_id: str | None = None
+    todos_tool_call_id: str | None = None
 
 
 class CheckpointResponse(BaseModel):

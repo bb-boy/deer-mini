@@ -20,10 +20,10 @@ def test_reasoning_is_delivered_before_answer_and_retained_in_message(subscribe_
         async def answer(text):
             received.append(("text", text))
 
-        def chunk(thought=None, text=None):
+        def chunk(thought=None, text=None, finish=None):
             return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
                 reasoning_content=thought, content=text, tool_calls=None,
-            ))])
+            ), finish_reason=finish)])
 
         async def stream():
             yield chunk("先读取")
@@ -31,6 +31,14 @@ def test_reasoning_is_delivered_before_answer_and_retained_in_message(subscribe_
             assert received == ([("reasoning", "先读取")] if subscribe_reasoning else [])
             yield chunk("资料。")
             yield chunk("", "这是回答。")
+            yield chunk(finish="stop")
+
+        class ResponseStream:
+            def __aiter__(self):
+                return stream()
+
+            async def close(self):
+                pass
 
         model = object.__new__(OpenAICompatibleModel)
         model._model_name = "offline-fixture"
@@ -39,7 +47,7 @@ def test_reasoning_is_delivered_before_answer_and_retained_in_message(subscribe_
             supports_reasoning_effort=False, thinking_format="deepseek",
         )
         model._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
-            create=AsyncMock(return_value=stream()),
+            create=AsyncMock(return_value=ResponseStream()),
         )))
         result = await model.chat(
             messages=[Message(role="user", content="读取资料")], tools=[],

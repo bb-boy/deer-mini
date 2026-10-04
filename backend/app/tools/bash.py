@@ -4,6 +4,15 @@ from app.domain.messages import ToolCall
 from app.domain.tools import ToolDefinition, ToolResult
 from app.runtime.context import RuntimeContext
 from app.sandbox.base import CommandRunner
+from pathlib import Path
+import logging
+from app.runtime.async_io import run_sync
+from app.runtime.errors import StatePersistenceError
+
+
+def _read_full_output(path: Path) -> str:
+    with path.open("r", encoding="utf-8", errors="replace", newline="") as file:
+        return file.read()
 
 
 class BashTool:
@@ -61,10 +70,24 @@ class BashTool:
                 run_id=context.run_id,
                 tool_call_id=call.id,
             )
+        except StatePersistenceError:
+            raise
         except Exception as error:
             return self._error(call, f"Bash 执行失败：{error}")
 
-        output = result.output or "(no output)"
+        output = result.output
+        if result.full_output_path is not None:
+            path = Path(result.full_output_path)
+            try:
+                output = await run_sync(_read_full_output, path)
+            except OSError as error:
+                raise StatePersistenceError("Bash 完整输出未能读取") from error
+            finally:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logging.getLogger(__name__).warning("Bash 输出临时文件清理失败")
+        output = output or "(no output)"
         if result.timed_out:
             return self._error(
                 call,

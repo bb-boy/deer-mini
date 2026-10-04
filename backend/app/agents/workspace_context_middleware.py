@@ -8,7 +8,7 @@ from pathlib import Path
 from app.agents.middleware import AgentMiddleware
 from app.domain.messages import Message
 from app.domain.threads import ThreadState
-from app.filesystem.thread_paths import VIRTUAL_WORKSPACE
+from app.filesystem.thread_paths import VIRTUAL_ROOT, VIRTUAL_WORKSPACE
 from app.runtime.context import RuntimeContext
 from app.tools.registry import ToolRegistry
 from app.filesystem.thread_paths import ThreadPaths
@@ -68,6 +68,8 @@ class WorkspaceContextMiddleware(AgentMiddleware):
             upload_hint = "附件列表暂时不可用；读取指定文件时仍须调用工具。\n"
         bash_hint = (
             f"bash 默认从 {VIRTUAL_WORKSPACE} 执行。\n"
+            "创建工作区文件使用 test-large.txt 等相对路径；"
+            "Bash 中的 workspace/test-large.txt 表示当前目录下再进入一层 workspace。\n"
             "上传资料位于 ../uploads，交付文件应保存到 ../outputs。\n"
             "每次命令都从默认工作目录开始，前一次 cd 不会自动延续。\n"
             if "bash" in tool_names
@@ -80,15 +82,15 @@ class WorkspaceContextMiddleware(AgentMiddleware):
                 f"当前用户：{context.user_id}\n"
                 f"当前 Thread：{context.thread_id}\n"
                 f"当前 Run：{context.run_id}\n"
-                f"服务端工作目录：{context.workspace_path}\n"
+                f"工具工作目录：{VIRTUAL_WORKSPACE}\n"
+                f"上传目录：{VIRTUAL_ROOT / 'uploads'}\n"
+                f"交付目录：{VIRTUAL_ROOT / 'outputs'}\n"
+                "read_file 的 test-large.txt 与 workspace/test-large.txt "
+                "都表示工作区根目录中的文件；也可使用 /mnt/user-data 下的完整工具路径。\n"
                 f"可用工具：{available_tools}\n"
-                "read_file 可使用 /mnt/user-data/workspace/、"
-                "/mnt/user-data/uploads/、/mnt/user-data/outputs/ 下的文件路径。\n"
-                "read_file 推荐写 uploads/资料.txt、outputs/结果.md 或 workspace/脚本.py；"
-                "没有区域前缀的路径仍按 workspace 解析，不自动搜索其他目录。\n"
+
                 f"{upload_hint}"
                 f"{bash_hint}"
-                "需要读取文件时必须调用工具，不能猜测文件内容。"
             ),
         )
         state.messages.insert(0, system_message)

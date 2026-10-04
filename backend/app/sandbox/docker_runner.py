@@ -34,6 +34,8 @@ from pathlib import Path
 import re
 # signal 提供 SIGTERM、SIGKILL 等操作系统信号的名称。
 import signal
+import shutil
+import tempfile
 # uuid4 产生随机标识，给不同命令或容器生成不同名字。
 from uuid import uuid4
 
@@ -41,6 +43,8 @@ from uuid import uuid4
 from app.filesystem.thread_paths import ThreadPaths, VIRTUAL_WORKSPACE
 # 统一返回给工具层的结果格式，定义在 base.py。
 from app.sandbox.base import CommandResult
+from app.runtime.async_io import run_sync
+from app.runtime.errors import StatePersistenceError
 
 # [^...] 表示“不属于这些字符”；末尾 + 表示连续一个或多个这样的字符。
 # 例如 "Run/001" 转小写后，其中 / 会被 _name_part() 替换成 -。
@@ -205,7 +209,7 @@ class _BoundedCapture:
     仍然必须继续读取管道，否则写满管道的命令可能卡住，迟迟无法退出。
     """
 
-    def __init__(self, limit_bytes: int) -> None:
+    def __init__(self, limit_bytes: int, *, preserve_full_output: bool = False) -> None:
         """按字节上限分配头尾容量，初始两个缓冲区都为空。
 
         例如 limit_bytes=100 时，头部最多留 50 字节，尾部最多留 50 字节。
@@ -223,6 +227,9 @@ class _BoundedCapture:
         self._tail = bytearray()
         # 累计收到的实际字节数，包括之后因为超限而丢弃的内容。
         self.total_bytes = 0
+        # 小输出留在内存，超过同一缓冲额度后自动转到临时磁盘文件。
+        self._full_output = tempfile.SpooledTemporaryFile(max_size=limit_bytes) if preserve_full_output else None
+        self._exported_path: str | None = None
 
     def append(self, chunk: bytes) -> None:
         """接收刚从管道读到的一块字节，更新头尾缓冲区。
@@ -231,6 +238,11 @@ class _BoundedCapture:
         例子：上限为 6，收到 b"abcdefgh" 后，头部是 abc，尾部是 fgh。
         """
         # len 对 bytes 计算的是字节数；+= 表示在已有累计值上再加这次的大小。
+        if self._full_output is not None:
+            try:
+                self._full_output.write(chunk)
+            except OSError as error:
+                raise StatePersistenceError("Bash 完整输出捕获失败") from error
         self.total_bytes += len(chunk)
         # 算出头部还差多少才填满，例如容量 50、已有 30，还差 20。
         head_missing = self._head_limit - len(self._head)
@@ -292,6 +304,41 @@ class _BoundedCapture:
             )
         # 切片可能切在一个汉字的中间，ignore 会跳过不完整字节；True 表示发生过截断。
         return data.decode("utf-8", errors="ignore"), True
+
+    def persist_full_output(self) -> str | None:
+        """预览超限时导出完整原始输出；BashTool 消费后删除文件。"""
+        if self._full_output is None or self.total_bytes <= self._limit_bytes:
+            return None
+        if self._exported_path is not None:
+            return self._exported_path
+        path = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix="deer-mini-bash-", suffix=".log", delete=False) as file:
+                path = file.name
+                self._full_output.seek(0)
+                shutil.copyfileobj(self._full_output, file)
+            self._exported_path = path
+            return path
+        except OSError as error:
+            if path is not None:
+                Path(path).unlink(missing_ok=True)
+            raise StatePersistenceError("Bash 完整输出未能保存") from error
+
+    def release_full_output(self) -> str | None:
+        """成功返回 CommandResult 后，清理责任交给 BashTool。"""
+        path = self._exported_path
+        self._exported_path = None
+        return path
+
+    def close(self) -> None:
+        if self._full_output is not None:
+            self._full_output.close()
+        if self._exported_path is not None:
+            try:
+                Path(self._exported_path).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Bash 取消后的输出临时文件清理失败")
+            self._exported_path = None
 
 
 # dataclass 自动生成按字段名接收参数的初始化方法；frozen=True 防止字段被随意改写。
@@ -753,7 +800,7 @@ class DockerCommandRunner:
         # _start_process 用 stdout=PIPE 创建了读取端，因此这里必须拿得到 stdout。
         assert process.stdout is not None
         # 为这一次命令创建独立输出缓冲区，按配置限制长期保存的字节数。
-        capture = _BoundedCapture(self.config.max_output_bytes)
+        capture = _BoundedCapture(self.config.max_output_bytes, preserve_full_output=True)
         # 启动读输出的后台任务，让读取与等待进程退出同时进行。
         # 如果只等退出而不读，进程可能因输出管道写满而卡住。
         drain_task = asyncio.create_task(
@@ -761,74 +808,81 @@ class DockerCommandRunner:
             name=f"bash-output-{container_name}",  # 任务名称只用于调试识别。
         )
 
-        # 第二阶段：等待退出；外层 try 接取消，内层 try 处理本执行器的超时。
         try:
-            # 把有限时间的等待包起来，超时后进入下面的 TimeoutError 分支。
+            # 第二阶段：等待退出；外层 try 接取消，内层 try 处理本执行器的超时。
             try:
-                # wait_for 等待指定操作，同时启动一个超时计时。
-                await asyncio.wait_for(
-                    process.wait(),  # 等待 Docker 客户端退出；在 exec 用法中通常对应命令结束。
-                    timeout=self.config.timeout_seconds,  # 默认最多等 60 秒。
-                )
-            # 到时仍没退出：仅取消 wait() 不会自动停止客户端或容器，需要主动清理。
-            except TimeoutError:
-                # finally 确保清理操作结束后还会等待输出读取任务。
+                # 把有限时间的等待包起来，超时后进入下面的 TimeoutError 分支。
                 try:
-                    # 先停客户端，再删容器，从而结束其中可能还在运行的 Bash 命令。
-                    await self._cleanup_cancelled_process(
-                        process,  # 要停止的客户端 Process 对象。
-                        container_name,  # 要停止并移除的容器。
+                    # wait_for 等待指定操作，同时启动一个超时计时。
+                    await asyncio.wait_for(
+                        process.wait(),  # 等待 Docker 客户端退出；在 exec 用法中通常对应命令结束。
+                        timeout=self.config.timeout_seconds,  # 默认最多等 60 秒。
                     )
-                # 无论上面的清理是否抛异常，都会进入这里处理输出任务。
-                finally:
-                    # 等管道关闭并读完残余输出，避免漏掉已经产生的最后一段文字。
-                    await drain_task
-                # 清理成功才会到这里；如果清理抛异常，就继续向上传递，不声称清理完成。
-                output, truncated = capture.render()
-                # 返回带明确超时标记的结果，让 BashTool 告诉模型这条命令未正常完成。
-                return CommandResult(
-                    output=output,  # 截止停止时已经收集到的输出。
-                    exit_code=None,  # 不把强制停止包装成一个正常的命令退出码。
-                    timed_out=True,  # 标明发生了执行超时。
-                    output_truncated=truncated,  # 输出是否因为超过字节额度而截断。
-                )
-        # 在这一段等待期间，用户停止或上层 Run 超时可能通过取消传递到这里。
-        except asyncio.CancelledError:
-            # 把清理变成独立任务，便于保护它，尽量等清理结束再结束本次调用。
-            cleanup_task = asyncio.create_task(
-                self._cleanup_cancelled_process(process, container_name),  # 清理客户端和容器。
-                name=f"bash-cleanup-{container_name}",  # 给后台清理任务一个可识别名字。
-            )
-            # 分别处理等待被再次取消，以及清理本身出现普通错误。
-            try:
-                # 外层取消不直接传给 cleanup_task；它仍可继续尝试完成清理。
-                await asyncio.shield(cleanup_task)
-            # 等待过程中再次收到取消，仍尝试等待已经开始的清理任务。
+                # 到时仍没退出：仅取消 wait() 不会自动停止客户端或容器，需要主动清理。
+                except TimeoutError:
+                    # finally 确保清理操作结束后还会等待输出读取任务。
+                    try:
+                        # 先停客户端，再删容器，从而结束其中可能还在运行的 Bash 命令。
+                        await self._cleanup_cancelled_process(
+                            process,  # 要停止的客户端 Process 对象。
+                            container_name,  # 要停止并移除的容器。
+                        )
+                    # 无论上面的清理是否抛异常，都会进入这里处理输出任务。
+                    finally:
+                        # 等管道关闭并读完残余输出，避免漏掉已经产生的最后一段文字。
+                        await drain_task
+                    # 清理成功才会到这里；如果清理抛异常，就继续向上传递，不声称清理完成。
+                    output, truncated = capture.render()
+                    await run_sync(capture.persist_full_output)
+                    # 返回带明确超时标记的结果，让 BashTool 告诉模型这条命令未正常完成。
+                    return CommandResult(
+                        output=output,  # 截止停止时已经收集到的输出。
+                        exit_code=None,  # 不把强制停止包装成一个正常的命令退出码。
+                        timed_out=True,  # 标明发生了执行超时。
+                        output_truncated=truncated,  # 输出是否因为超过字节额度而截断。
+                        full_output_path=capture.release_full_output(),
+                    )
+            # 在这一段等待期间，用户停止或上层 Run 超时可能通过取消传递到这里。
             except asyncio.CancelledError:
-                # 这里等待原任务，不重新发起一套删除流程。
-                await cleanup_task
-            # 如果清理失败，记下不能确认容器已删除这一事实。
-            except Exception:
-                # 不能通过一条普通成功输出掩盖清理问题，因此保留错误日志。
-                logger.exception(
-                    "取消 Bash 时无法确认容器 %s 已删除",
-                    container_name,
+                # 把清理变成独立任务，便于保护它，尽量等清理结束再结束本次调用。
+                cleanup_task = asyncio.create_task(
+                    self._cleanup_cancelled_process(process, container_name),  # 清理客户端和容器。
+                    name=f"bash-cleanup-{container_name}",  # 给后台清理任务一个可识别名字。
                 )
-            # 清理处理后，让读取任务消费完管道中已经留下的内容。
-            await drain_task
-            # 取消是控制执行流程的异常，继续交给 Runtime 完成本轮收尾。
-            raise
+                # 分别处理等待被再次取消，以及清理本身出现普通错误。
+                try:
+                    # 外层取消不直接传给 cleanup_task；它仍可继续尝试完成清理。
+                    await asyncio.shield(cleanup_task)
+                # 等待过程中再次收到取消，仍尝试等待已经开始的清理任务。
+                except asyncio.CancelledError:
+                    # 这里等待原任务，不重新发起一套删除流程。
+                    await cleanup_task
+                # 如果清理失败，记下不能确认容器已删除这一事实。
+                except Exception:
+                    # 不能通过一条普通成功输出掩盖清理问题，因此保留错误日志。
+                    logger.exception(
+                        "取消 Bash 时无法确认容器 %s 已删除",
+                        container_name,
+                    )
+                # 清理处理后，让读取任务消费完管道中已经留下的内容。
+                await drain_task
+                # 取消是控制执行流程的异常，继续交给 Runtime 完成本轮收尾。
+                raise
 
-        # 正常退出也要等管道读完：进程结束时，管道里可能还留着尚未消费的文字。
-        await drain_task
-        # 取出最终显示文字和截断标记。
-        output, truncated = capture.render()
-        # 返回完整结果；非零退出码也保留给 BashTool 判断，而不是在这里统一改成异常。
-        return CommandResult(
-            output=output,  # 合并后的普通输出与错误输出。
-            exit_code=process.returncode,  # 例如 0 表示正常成功，7 表示命令返回了错误码 7。
-            output_truncated=truncated,  # 是否只保留了输出头尾；timed_out 使用默认 False。
-        )
+            # 正常退出也要等管道读完：进程结束时，管道里可能还留着尚未消费的文字。
+            await drain_task
+            # 取出最终显示文字和截断标记。
+            output, truncated = capture.render()
+            await run_sync(capture.persist_full_output)
+            # 返回完整结果；非零退出码也保留给 BashTool 判断，而不是在这里统一改成异常。
+            return CommandResult(
+                output=output,  # 合并后的普通输出与错误输出。
+                exit_code=process.returncode,  # 例如 0 表示正常成功，7 表示命令返回了错误码 7。
+                output_truncated=truncated,  # 是否只保留了输出头尾；timed_out 使用默认 False。
+                full_output_path=capture.release_full_output(),
+            )
+        finally:
+            capture.close()
 
     async def _start_process(self, args: list[str]) -> Process:
         """启动服务器上的 Docker 命令行程序，返回可管理的 Process 对象。
@@ -860,8 +914,8 @@ class DockerCommandRunner:
         # := 同时赋值和判断：先 await 读取至多 64 KiB，再把结果保存到 chunk。
         # 读到非空 bytes 就进入循环；读到 b"" 表示输出结束，while 自动退出。
         while chunk := await stream.read(64 * 1024):
-            # 即使保存额度已经用完，也继续读，只由 capture 丢弃过长的中间部分。
-            capture.append(chunk)
+            # 全文可写入磁盘；在线程中执行，避免磁盘等待阻塞流式响应。
+            await run_sync(capture.append, chunk)
 
     async def _cleanup_cancelled_process(
         self,  # 当前执行器，提供 Docker 程序位置及删除方法。
@@ -992,9 +1046,9 @@ def load_docker_runner_from_env() -> DockerCommandRunner | None:
             "DEER_MINI_BASH_TIMEOUT_SECONDS",  # 配置项名称。
             "60",  # 未设置时默认 60 秒。
         ),
-        # 输出额度按整数个字节计算。
+        # 内存预览缓冲按字节计算；完整输出另存临时文件，不因此丢弃。
         max_output_bytes=_load_int(
-            "DEER_MINI_BASH_MAX_OUTPUT_BYTES",  # 控制最终保留多少输出字节。
+            "DEER_MINI_BASH_MAX_OUTPUT_BYTES",  # 控制捕获器预览和转磁盘的字节额度。
             "20000",  # 默认 20000 字节；原始管道仍持续读取。
         ),
         memory_limit=os.getenv("DEER_MINI_BASH_MEMORY_LIMIT", "512m"),  # 保留带单位的文字，稍后换算。

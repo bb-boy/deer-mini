@@ -22,11 +22,16 @@
 
 
 import json
+import asyncio
+import logging
+import httpx2
 from typing import Any
 
 from app.domain.messages import Message, ToolCall
 from openai import AsyncOpenAI
 from app.domain.tools import ToolDefinition
+from app.model.call_policy import ModelCallPolicy
+from app.model.errors import IncompleteModelResponseError, InvalidModelResponseError
 from app.model.base import TextDeltaHandler
 from dataclasses import dataclass, field
 from app.model.config import get_model_profile,ModelProfile
@@ -68,6 +73,7 @@ class OpenAICompatibleModel:
             raise ValueError("Model profile is required")
 
 
+        policy = ModelCallPolicy.from_env()
         self._profile = profile
 
         self._model_name= profile.model_id
@@ -81,6 +87,13 @@ class OpenAICompatibleModel:
                 AsyncOpenAI(
                             api_key=api_key,
                             base_url=base_url,
+                            max_retries=0,
+                            timeout=httpx2.Timeout(
+                                connect=policy.connect_timeout_seconds,
+                                read=policy.read_timeout_seconds,
+                                write=policy.write_timeout_seconds,
+                                pool=policy.pool_timeout_seconds,
+                            ),
                )
 )
 
@@ -382,79 +395,99 @@ class OpenAICompatibleModel:
 
 
         #遍历流式返回的chunk
-        async for chunk in response_stream:
-            #SDK 把服务器返回的 JSON 数据，包装成了一个 Python 类的实例
-            #chunk是一个类对象，不是字典，所以不能直接用chunk["choices"]，而是要用chunk.choices
-            #判断choices是否为空
-            if not chunk.choices:
-                continue
-
-            delta = chunk.choices[0].delta
-
-
-            #1 处理工具调用内容
-
-            ## 拿到所有的工具调用碎片，放到列表中，ID、index 、tpye 、function等，如果没有tool_calls就返回空列表
-            tool_call_delta = getattr(delta, "tool_calls", None) or []
-
-            ## 遍历工具调用碎片
-            for tool_call in tool_call_delta:
-                #拿到工具调用index
-                index = tool_call.index
-                #tool_call_parts中如果已经有就返回对象的_ToolCallPart(),如果没有就创建一个新的_ToolCallPart()，并返回
-                part =tool_call_parts.setdefault(index, _ToolCallPart())
-
-
-                #如果碎片有id，就把它加入part.id,一般id不会被拆开，所以这里直接赋值即可
-                if tool_call.id:
-                    part.id = tool_call.id
-
-                #拿到函数对象，没有就返回None，有就返回字典
-                delta_function = getattr(tool_call, "function", None)
-
-                #如果函数对象为空，就跳过
-                if not delta_function:
+        finish_reason = None
+        try:
+            async for chunk in response_stream:
+                #SDK 把服务器返回的 JSON 数据，包装成了一个 Python 类的实例
+                #chunk是一个类对象，不是字典，所以不能直接用chunk["choices"]，而是要用chunk.choices
+                #判断choices是否为空
+                if not chunk.choices:
                     continue
 
-
-                #如果函数名被拆分就拼接
-                if delta_function.name:
-                    part.name += delta_function.name
-
-                #如果函数参数被拆分就拼接
-                if delta_function.arguments:
-                    part.argument_json += delta_function.arguments
+                if chunk.choices[0].finish_reason is not None:
+                    finish_reason = chunk.choices[0].finish_reason
+                delta = chunk.choices[0].delta
 
 
-            #2 处理推理内容，先取出来推理内容,有就返回到reasoning_delta，没有就返回None
-            reasoning_delta = getattr(delta, "reasoning_content", None)
+                #1 处理工具调用内容
 
-            #如果reasoning_delta不为None，就把它加入reasoning_parts，并调用on_reasoning_delta
-            if reasoning_delta is not None:
-                reasoning_parts.append(reasoning_delta)
-                # 和正文一样立即发送；不必等整轮模型回复完成才显示思考。
-                if reasoning_delta and on_reasoning_delta is not None:
-                    await on_reasoning_delta(reasoning_delta)
+                ## 拿到所有的工具调用碎片，放到列表中，ID、index 、tpye 、function等，如果没有tool_calls就返回空列表
+                tool_call_delta = getattr(delta, "tool_calls", None) or []
 
-
-
-            #3 处理文字内容，先取出来文字内容,有就返回到text_delta，没有就返回None
-
-            text_delta = delta.content
+                ## 遍历工具调用碎片
+                for tool_call in tool_call_delta:
+                    #拿到工具调用index
+                    index = tool_call.index
+                    #tool_call_parts中如果已经有就返回对象的_ToolCallPart(),如果没有就创建一个新的_ToolCallPart()，并返回
+                    part =tool_call_parts.setdefault(index, _ToolCallPart())
 
 
-            #模型返回内容是none，就进行下次循环
-            if not text_delta:
-                continue
+                    #如果碎片有id，就把它加入part.id,一般id不会被拆开，所以这里直接赋值即可
+                    if tool_call.id:
+                        part.id = tool_call.id
 
-            #如果有on_text_delta，就调用它，把text_delta传进去，实时传给SSE
-            if on_text_delta is not None:
-                await on_text_delta(text_delta)
+                    #拿到函数对象，没有就返回None，有就返回字典
+                    delta_function = getattr(tool_call, "function", None)
+
+                    #如果函数对象为空，就跳过
+                    if not delta_function:
+                        continue
 
 
-            #把text_delta加入text_parts，拼成完整的assistant Message
-            text_parts.append(text_delta)
+                    #如果函数名被拆分就拼接
+                    if delta_function.name:
+                        part.name += delta_function.name
 
+                    #如果函数参数被拆分就拼接
+                    if delta_function.arguments:
+                        part.argument_json += delta_function.arguments
+
+
+                #2 处理推理内容，先取出来推理内容,有就返回到reasoning_delta，没有就返回None
+                reasoning_delta = getattr(delta, "reasoning_content", None)
+
+                #如果reasoning_delta不为None，就把它加入reasoning_parts，并调用on_reasoning_delta
+                if reasoning_delta is not None:
+                    reasoning_parts.append(reasoning_delta)
+                    # 和正文一样立即发送；不必等整轮模型回复完成才显示思考。
+                    if reasoning_delta and on_reasoning_delta is not None:
+                        await on_reasoning_delta(reasoning_delta)
+
+
+
+                #3 处理文字内容，先取出来文字内容,有就返回到text_delta，没有就返回None
+
+                text_delta = delta.content
+
+
+                #模型返回内容是none，就进行下次循环
+                if not text_delta:
+                    continue
+
+                #如果有on_text_delta，就调用它，把text_delta传进去，实时传给SSE
+                if on_text_delta is not None:
+                    await on_text_delta(text_delta)
+
+
+                #把text_delta加入text_parts，拼成完整的assistant Message
+                text_parts.append(text_delta)
+
+
+        except BaseException:
+            try:
+                await response_stream.close()
+            except (Exception, asyncio.CancelledError):
+                logging.getLogger("uvicorn.error").warning("模型流关闭失败，保留最初的执行异常")
+            raise
+        else:
+            await response_stream.close()
+
+        # 收齐流并确认完成后，才解析工具；不会执行半截工具参数。
+        if finish_reason is None:
+            raise IncompleteModelResponseError()
+        if finish_reason not in {"stop", "tool_calls"}:
+            reason = {"length": "response_length", "content_filter": "content_filter"}.get(finish_reason, "invalid_response")
+            raise InvalidModelResponseError(reason)
 
         #拼接完整的content
         full_text = "".join(text_parts)
@@ -468,9 +501,9 @@ class OpenAICompatibleModel:
 
             #id和name不能为空，否则无法创建ToolCall对象
             if not part.id:
-                raise ValueError(f"第{index}个工具调用缺少id")
+                raise InvalidModelResponseError()
             if not part.name:
-                raise ValueError(f"第{index}个工具调用缺少name")
+                raise InvalidModelResponseError()
 
 
             #把argument_json是否缺失
@@ -482,12 +515,12 @@ class OpenAICompatibleModel:
             try:
                 arguments = json.loads(arguments_json)
             except json.JSONDecodeError as error:
-                raise ValueError(f"第{index}个工具的参数不是合法的json: {arguments_json}") from error
+                raise InvalidModelResponseError() from None
 
 
             #判断转换为arguments是否是合法的dict
             if not isinstance(arguments, dict):
-                raise ValueError(f"第{index}个工具的参数不是合法的dict: {arguments}")
+                raise InvalidModelResponseError()
 
             completed_tool_calls.append(
                 ToolCall(

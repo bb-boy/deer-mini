@@ -66,8 +66,10 @@ class EventRecorder:
             run_id=self._run_id, thread_id=self._thread_id,
             event_type=event_type, payload=deepcopy(payload),
         )
-        # 两种片段都只实时发布；完整正文和思考随 message.complete / Checkpoint 保存。
-        if event_type not in {"text.delta", "reasoning.delta"}:
+        # 主/子 Agent 的片段都只实时发布；完整消息随各自 complete / Checkpoint 保存。
+        if event_type not in {
+            "text.delta", "reasoning.delta", "subagent.text.delta", "subagent.reasoning.delta",
+        }:
             self._enqueue(event)
         await self._stream_bridge.publish(self._run_id, "run_event", event.to_dict())
         return event

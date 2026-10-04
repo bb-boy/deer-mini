@@ -8,6 +8,7 @@ from app.agents.prompts.working_directory import WORKING_DIRECTORY_PROMPT
 from app.agents.prompts.thinking_style import THINKING_STYLE_PROMPT
 from app.agents.prompts.citations import CITATIONS_PROMPT
 from app.agents.prompts.subagent_system import build_subagent_section
+from app.memory.prompts import MEMORY_SYSTEM_PROMPT
 
 # 从当前源码位置定位 backend，避免启动目录不同导致找错文件。
 SOUL_PATH = Path(__file__).resolve().parents[3] / "SOUL.md"
@@ -37,4 +38,4 @@ def apply_prompt_template(
         # 搜索可用时，才要求模型按 DeerFlow 原版规则引用真实来源。
         citations=CITATIONS_PROMPT if web_search_enabled else "",
         subagent_system=build_subagent_section() if subagent_enabled else "",
-    )
+    ) + "\n" + MEMORY_SYSTEM_PROMPT

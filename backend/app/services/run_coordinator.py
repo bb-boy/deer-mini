@@ -5,6 +5,7 @@ import logging
 import math
 import os
 from typing import cast
+from collections.abc import Callable
 
 from app.agents.prompts.builder import apply_prompt_template
 from app.agents.lead_agent import LeadAgent
@@ -14,6 +15,8 @@ from app.agents.workspace_context_middleware import WorkspaceContextMiddleware
 from app.domain.runs import Run
 from app.domain.threads import ThreadState
 from app.model.factory import ModelFactory
+from app.model.base import ChatModel
+from app.memory.service import MemoryService
 from app.model.errors import ModelCallError
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.async_io import run_sync
@@ -76,8 +79,10 @@ class RunCoordinator:
         run_service: RunService | None = None,
         run_timeout_seconds: float | None = None,
         bash_runner: CommandRunner | None | object = _AUTO_BASH_RUNNER,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self._stream_bridge = stream_bridge
+        self._memory_service = memory_service or MemoryService()
         self._run_service = run_service or RunService()
         self._run_timeout_seconds = (
             _load_run_timeout_seconds()
@@ -152,6 +157,16 @@ class RunCoordinator:
                 web_search_enabled=registry.get("web_search") is not None,
                 subagent_enabled=True,
             )
+            extra_middlewares = [
+                WorkspaceContextMiddleware(registry),
+                TodoMiddleware(todo_tool),
+                SubagentMiddleware(
+                    task_tool, registry, model_factory.create_chat_model,
+                    thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort,
+                ),
+            ]
+            if self._memory_service.enabled:
+                extra_middlewares.append(self._memory_service.middleware(model_factory.create_chat_model))
             agent = LeadAgent(
                 model=model,
                 tool_registry=registry,
@@ -159,14 +174,7 @@ class RunCoordinator:
                 thinking_enabled=thinking_enabled,
                 reasoning_effort=reasoning_effort,
                 system_prompt=system_prompt,
-                middlewares=build_runtime_middlewares([
-                    WorkspaceContextMiddleware(registry),
-                    TodoMiddleware(todo_tool),
-                    SubagentMiddleware(
-                        task_tool, registry, model_factory.create_chat_model,
-                        thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort,
-                    ),
-                ]),
+                middlewares=build_runtime_middlewares(extra_middlewares),
             )
             run = self._run_service.create_run(
                 user_id=user_id,
@@ -197,6 +205,7 @@ class RunCoordinator:
             lambda finished_task, run_id=run.id: self._consume_finished_task(
                 run_id,
                 finished_task,
+                memory_factory=model_factory.create_chat_model,
             )
         )
         return run
@@ -359,11 +368,13 @@ class RunCoordinator:
 
     async def shutdown(self) -> None:
         """应用退出时取消仍在运行的 Agent，避免遗留 running Run。"""
+        self._memory_service.stop_accepting()
         tasks = list(self._tasks.values())
         for task in tasks:
             task.cancel("server_shutdown")
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        await self._memory_service.shutdown()
         await EventRecorder.shutdown_writers()
         if self._sandbox_manager is not None:
             await self._sandbox_manager.close()
@@ -372,6 +383,7 @@ class RunCoordinator:
         self,
         run_id: str,
         task: asyncio.Task[ThreadState],
+        *, memory_factory: Callable[[], ChatModel] | None = None,
     ) -> None:
         """移除已完成任务，并读取异常，避免 asyncio 输出未处理警告。"""
         if self._tasks.get(run_id) is task:
@@ -393,3 +405,7 @@ class RunCoordinator:
                 "Agent 后台任务执行失败",
                 exc_info=(type(error), error, error.__traceback__),
             )
+            return
+        if memory_factory is not None:
+            # Runtime 成功返回时，最终 checkpoint、Run 终态和收尾均已确认。
+            self._memory_service.schedule(task.result(), run_id, memory_factory)

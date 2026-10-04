@@ -42,6 +42,7 @@ vi.mock("./hooks/useAgentRun", () => ({
     running: false,
     error: null,
     connectionNotice: null,
+    modelNotices: [],
     start: (...args: unknown[]) => startAgentRunMock(...args),
     resume: vi.fn(),
     cancel: vi.fn(),

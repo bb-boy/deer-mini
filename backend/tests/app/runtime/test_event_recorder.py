@@ -38,7 +38,9 @@ class GatedRepository(EventRepository):
         return super().append_batch(events, user_id)
 
 
-@pytest.mark.parametrize("event_type", ["text.delta", "reasoning.delta"])
+@pytest.mark.parametrize("event_type", [
+    "text.delta", "reasoning.delta", "subagent.text.delta", "subagent.reasoning.delta",
+])
 def test_live_text_arrives_while_database_write_is_blocked(storage, event_type):
     thread, run = storage
     repo = GatedRepository()

@@ -678,6 +678,11 @@ export default function App() {
             <span>{agentRun.connectionNotice}</span>
           </div>
         ) : null}
+        {agentRun.modelNotices.map((notice, index) => (
+          <div key={`${index}:${notice}`} className="notice connection-notice" role="status">
+            <span className="notice-pulse" /><span>{notice}</span>
+          </div>
+        ))}
         {copyNotice ? <div className="copy-toast" role="status">已复制到剪贴板</div> : null}
         <div className="messages-scroll">
           <div className="messages-frame">

@@ -18,9 +18,10 @@ warm pool 在这里就是“已准备好、暂时空闲的容器集合”。
 from dataclasses import dataclass
 
 
-# 这里没有 frozen=True：管理器需要不断更新占用者、闲置时刻和容器状态。
+
 @dataclass
 class SandboxEntry:
+
     """保存一段对话的容器登记信息，供 manager.py 使用。
 
     创建时接收：用户 ID、对话 ID、服务器上的 workspace 路径。

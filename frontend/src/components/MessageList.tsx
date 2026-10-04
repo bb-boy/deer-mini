@@ -115,6 +115,8 @@ const AssistantReply = memo(function AssistantReply({
         <header>
           <span>DeerMini</span>
           {createdAt && <time>{formatMessageTime(createdAt)}</time>}
+          {liveMessages.some((message) => message.generation_interrupted) &&
+            <span role="status">生成中断 · 此片段未保存为完整回复</span>}
           {running && <span className="live-label"><span className="live-dot" />{activeTool ? "正在执行工具" : reasoningMessageId ? "正在思考" : streamingMessageId || content ? "正在输出" : "正在处理"}</span>}
         </header>
         {steps.length > 0 && (

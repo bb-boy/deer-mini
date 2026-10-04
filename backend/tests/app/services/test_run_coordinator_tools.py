@@ -1,4 +1,4 @@
-"""RunCoordinator 的 Bash 工具开关与配置测试。"""
+"""RunCoordinator 的工具开关与配置测试。"""
 
 import asyncio
 
@@ -11,7 +11,39 @@ from app.sandbox.docker_runner import (
 )
 from app.services.run_coordinator import RunCoordinator
 from app.runtime.stream_bridge import MemoryStreamBridge
+from app.agents.prompts.builder import apply_prompt_template
 import app.services.run_coordinator as run_coordinator_module
+
+
+@pytest.fixture(autouse=True)
+def isolate_search_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 测试不受开发机 .env 中真实密钥影响；启用场景单独设置虚拟值。
+    monkeypatch.setenv("TAVILY_API_KEY", "")
+
+
+def test_configured_tavily_registers_web_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TAVILY_API_KEY", "test-search-key")
+    coordinator = RunCoordinator(MemoryStreamBridge(), bash_runner=None)
+    registry = coordinator._build_tool_registry()
+    assert [tool.name for tool in registry.definitions()] == ["read_file", "read_tool_result", "web_search", "web_fetch", "task", "write_todos"]
+    assert "test-search-key" not in repr(registry.definitions())
+
+
+def test_blank_tavily_key_does_not_register_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TAVILY_API_KEY", "  ")
+    coordinator = RunCoordinator(MemoryStreamBridge(), bash_runner=None)
+    assert coordinator._build_tool_registry().get("web_search") is None
+    assert coordinator._build_tool_registry().get("web_fetch") is None
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_citations_only_appear_when_search_is_available(enabled: bool) -> None:
+    prompt = apply_prompt_template(web_search_enabled=enabled)
+    assert ("<citations>" in prompt) is enabled
+    assert ("web_fetch" in prompt) is enabled
+    if enabled:
+        assert "Extract {title, url, snippet} from results" in prompt
+        assert "{{title" not in prompt
 
 
 class RecordingRunner:
@@ -45,7 +77,7 @@ def test_bash_tool_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> No
         run_timeout_seconds=10,
     )
 
-    assert _tool_names(coordinator) == ["read_file"]
+    assert _tool_names(coordinator) == ["read_file", "read_tool_result", "task", "write_todos"]
 
 
 def test_injected_runner_registers_bash_tool() -> None:
@@ -55,7 +87,7 @@ def test_injected_runner_registers_bash_tool() -> None:
         bash_runner=RecordingRunner(),
     )
 
-    assert _tool_names(coordinator) == ["read_file", "bash"]
+    assert _tool_names(coordinator) == ["read_file", "read_tool_result", "bash", "task", "write_todos"]
 
 
 def test_enabled_environment_registers_bash_tool(
@@ -68,7 +100,7 @@ def test_enabled_environment_registers_bash_tool(
         run_timeout_seconds=10,
     )
 
-    assert _tool_names(coordinator) == ["read_file", "bash"]
+    assert _tool_names(coordinator) == ["read_file", "read_tool_result", "bash", "task", "write_todos"]
 
 
 def test_load_docker_runner_from_environment(

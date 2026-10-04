@@ -40,6 +40,8 @@ class CommandResult:
     timed_out: bool = False
     # 默认保留了全部输出；输出太长、只留下头尾时设置为 True。
     output_truncated: bool = False
+    # 缓冲预览之外的完整原始输出；消费者读完后负责删除临时文件。
+    full_output_path: str | None = None
 
 
 # Protocol 像“插座标准”：调用方只关心方法是否符合约定，不关心内部用哪种实现。
@@ -73,12 +75,6 @@ class CommandRunner(Protocol):
 
 
 class SandboxLifecycle(Protocol):
-    """约定 Runtime 怎样通知“本轮开始使用环境”和“本轮归还环境”。
-
-    Runtime 是管理一次 Run 全过程的协调者，它不需要了解 Docker 参数。
-    它只需在调用 Agent 前 await begin_run(...)，在收尾时 await end_run(...)。
-    当前 ThreadSandboxManager 同时满足这个约定和上面的 CommandRunner 约定。
-    """
 
     # 开始一轮执行时，Runtime 提供归属信息和服务器上的工作目录。
     async def begin_run(

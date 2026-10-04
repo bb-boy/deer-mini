@@ -1,0 +1,20 @@
+{
+    admin off
+    persist_config off
+    auto_https off
+}
+
+http://:5175 {
+    bind 100.89.194.19
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8005 {
+            flush_interval -1
+        }
+    }
+    handle {
+        encode gzip
+        root * /home/pl/deer_mini/frontend/releases/web-20261003-model-errors
+        try_files {path} /index.html
+        file_server
+    }
+}

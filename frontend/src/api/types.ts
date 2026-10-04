@@ -60,6 +60,15 @@ export interface Message {
   tool_calls: ToolCall[];
   tool_call_id: string | null;
   reasoning_content: string | null;
+  // 仅前端实时片段使用，不写入后端对话历史。
+  generation_interrupted?: boolean;
+}
+
+export type TodoStatus = "pending" | "in_progress" | "completed";
+
+export interface TodoItem {
+  content: string;
+  status: TodoStatus;
 }
 
 export interface ThreadState {
@@ -67,6 +76,10 @@ export interface ThreadState {
   user_id: string;
   messages: Message[];
   workspace_path: string | null;
+  // 可选字段兼容升级前返回的旧快照；新后端默认返回空列表和 null。
+  todos?: TodoItem[];
+  todos_run_id?: string | null;
+  todos_tool_call_id?: string | null;
 }
 
 export interface Checkpoint {
@@ -90,8 +103,13 @@ export type RunEventType =
   | "text.delta"
   | "reasoning.delta"
   | "message.complete"
+  | "model.status"
+  | "model.interrupted"
+  | "subagent.model.status"
+  | "subagent.model.interrupted"
   | "tool.start"
   | "tool.end"
+  | "todos.updated"
   | "run.end"
   | "run.error"
   | "run.interrupted"

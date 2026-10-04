@@ -9,9 +9,15 @@ T = TypeVar("T")
 
 async def finish_inflight(task: asyncio.Task[T]) -> T:
     """等待在途操作结束，再传递取消，避免 SQLite 仍在写时开始下一次收尾。"""
+
+
     cancelled: asyncio.CancelledError | None = None
+
+    #一直等待
     while True:
         try:
+
+            #执行任务，
             result = await asyncio.shield(task)
             break
         except asyncio.CancelledError as error:

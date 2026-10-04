@@ -22,6 +22,10 @@ const toolEvent: LiveToolEvent = {
 };
 
 describe("MessageList", () => {
+  it("labels interrupted output as an incomplete reply", () => {
+    render(<MessageList messages={[user]} liveMessages={[{ ...answer, generation_interrupted: true }]} />);
+    expect(screen.getByText("生成中断 · 此片段未保存为完整回复")).toBeTruthy();
+  });
   it("uses the same Markdown rendering for reasoning, tool commentary and answers", () => {
     const formattedRequest = { ...request, content: "## 工具前说明\n\n- 读取时间", reasoning_content: "## 判断依据\n\n**需要工具**" };
     const formattedAnswer = { ...answer, content: "## 最终回答\n\n| 时间 | 时区 |\n| --- | --- |\n| 18:00 | CST |" };

@@ -90,6 +90,28 @@ class FailingModel:
         self.close_called = True
 
 
+def test_successful_response_does_not_hide_model_close_failure(tmp_path):
+    close_error = OSError("关闭客户端失败")
+
+    class ReplyModel:
+        async def chat(self, **kwargs):
+            return Message(role="assistant", content="已生成回答")
+
+        async def close(self):
+            raise close_error
+
+    async def scenario():
+        registry, executor = build_registry_and_executor()
+        context, _, _ = build_recording_context(tmp_path)
+        state = ThreadState(thread_id=context.thread_id, user_id=context.user_id)
+        with pytest.raises(OSError) as caught:
+            await LeadAgent(ReplyModel(), registry, executor).run(state, context)
+        assert caught.value is close_error
+        assert state.messages[-1].content == "已生成回答"
+
+    asyncio.run(scenario())
+
+
 def build_registry_and_executor() -> tuple[ToolRegistry, ToolExecutor]:
     """注册真实 read_file，并创建统一工具执行器。"""
     registry = ToolRegistry()
@@ -191,6 +213,10 @@ def test_agent_loop_executes_real_tool_and_returns_result_to_model(
     assert model.received_tool_names == [["read_file"], ["read_file"]]
     assert model.close_called is True
 
+    assert [event.payload["phase"] for event in events if event.event_type == "model.status"] == [
+        "attempt", "complete", "attempt", "complete",
+    ]
+    events = [event for event in events if event.event_type != "model.status"]
     assert [event.event_type for event in events] == [
         "text.delta",
         "message.complete",
@@ -265,7 +291,8 @@ def test_agent_loop_closes_model_and_preserves_error(tmp_path: Path) -> None:
         asyncio.run(LeadAgent(model, registry, executor).run(state, context))
 
     assert model.close_called is True
-    assert events == []
+    assert [event.event_type for event in events] == ["model.status"]
+    assert events[0].payload["phase"] == "attempt"
     assert checkpoints == []
 
 

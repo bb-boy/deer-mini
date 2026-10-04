@@ -17,7 +17,7 @@
 
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections.abc import Awaitable, Callable
 from typing import Any
 from app.domain.checkpoints import Checkpoint
@@ -32,6 +32,12 @@ RecordEvent = Callable[[RunEventType, dict[str, Any]], Awaitable[RunEvent]]
 SaveCheckpoint = Callable[[ThreadState], Awaitable[Checkpoint]]
 
 
+@dataclass
+class ModelRetryBudget:
+    """同一 Run 的主/子 Context 共用；检查和消耗之间没有 await。"""
+    empty_response_retry_used: bool = False
+
+
 @dataclass(frozen =True)
 class RuntimeContext:
     user_id: str
@@ -44,3 +50,4 @@ class RuntimeContext:
 
     # 必须 await 成功后才能继续关键步骤；写库在线程中，不阻塞 SSE。
     save_checkpoint: SaveCheckpoint
+    model_retry_budget: ModelRetryBudget = field(default_factory=ModelRetryBudget)

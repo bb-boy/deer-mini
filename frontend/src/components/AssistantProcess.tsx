@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import {
-  BookOpenTextIcon, ChevronDownIcon, CopyIcon, FolderOpenIcon,
-  MessageSquareTextIcon, NotebookPenIcon, SquareTerminalIcon, WrenchIcon,
+  BookOpenTextIcon, ChevronDownIcon, CopyIcon, FolderOpenIcon, GlobeIcon,
+  ListTodoIcon, MessageSquareTextIcon, NotebookPenIcon, SearchIcon, SquareTerminalIcon, WrenchIcon,
 } from "lucide-react";
 import type { ProcessStep, ToolProcessStep } from "./message-groups";
 import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtStep } from "./ai-elements/chain-of-thought";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { MarkdownContent } from "./MarkdownContent";
 import { ReasoningBlock } from "./ReasoningBlock";
+import { parseTodoResult, TodoList } from "./TodoList";
 
 interface AssistantProcessProps {
   steps: ProcessStep[];
@@ -29,7 +30,10 @@ type DisplayStep = ToolProcessStep | {
 const toolPresentation = {
   bash: { label: "执行命令", icon: SquareTerminalIcon },
   read_file: { label: "读取文件", icon: BookOpenTextIcon },
+  web_search: { label: "搜索网页", icon: SearchIcon },
+  web_fetch: { label: "读取网页", icon: GlobeIcon },
   write_file: { label: "写入文件", icon: NotebookPenIcon },
+  write_todos: { label: "更新任务清单", icon: ListTodoIcon },
   str_replace: { label: "修改文件", icon: NotebookPenIcon },
   ls: { label: "查看目录", icon: FolderOpenIcon },
 };
@@ -43,6 +47,8 @@ function ToolStep({ step, onCopy }: { step: ToolProcessStep; onCopy?: AssistantP
   const rawHint = args.path ?? args.command ?? args.url ?? args.query;
   const hint = typeof rawHint === "string" ? rawHint.replace(/\s+/g, " ") : "";
   const phase = { pending: "等待执行", running: "正在运行", finished: "已返回", unconfirmed: "未收到结果" }[step.phase];
+  const todos = step.name === "write_todos" && step.phase === "finished"
+    ? parseTodoResult(step.content, step.id) : null;
   return (
     <Collapsible className="reply-tool" data-tool-call-id={step.id}>
       <ChainOfThoughtStep className="process-step" icon={presentation.icon}
@@ -55,6 +61,10 @@ function ToolStep({ step, onCopy }: { step: ToolProcessStep; onCopy?: AssistantP
             <ChevronDownIcon className="process-tool-chevron" size={13} />
           </CollapsibleTrigger>
         }>
+        {todos !== null && <TodoList todos={todos} />}
+        {step.name === "write_todos" && todos === null
+          && (step.phase === "finished" || step.phase === "unconfirmed")
+          && <p className="process-tool-waiting">清单尚未确认保存，请查看工具结果</p>}
         <CollapsibleContent className="process-tool-details">
           {Object.keys(args).length > 0 && <>
             <div className="process-detail-label">调用参数</div>

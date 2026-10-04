@@ -47,6 +47,9 @@ class Message:
     tool_calls: List[ToolCall] = field(default_factory=list) #每次创建一个实例，都默认生成一个新的list
     tool_call_id: str | None = None
     reasoning_content: str | None = None #记录推理过程
+    is_error: bool = False #工具失败标记；旧消息默认没有错误
+    tool_result_file: str | None = None #完整工具结果的 Thread 内虚拟路径
+    tool_result_chars: int | None = None #落盘前的原始字符数
 
     #把message对象转化为字典，方便存储和传输
     def to_dict(self) -> dict[str, Any]:
@@ -57,7 +60,10 @@ class Message:
             "created_at": self.created_at,
             "tool_calls": [tool_call.to_dict() for tool_call in self.tool_calls],
             "tool_call_id": self.tool_call_id,
-            "reasoning_content": self.reasoning_content
+            "reasoning_content": self.reasoning_content,
+            "is_error": self.is_error,
+            "tool_result_file": self.tool_result_file,
+            "tool_result_chars": self.tool_result_chars,
         }
 
 
@@ -72,5 +78,8 @@ class Message:
             created_at=data["created_at"],
             tool_calls=[ToolCall.from_dict(tc) for tc in data["tool_calls"]],
             tool_call_id=data["tool_call_id"],
-            reasoning_content=data.get("reasoning_content")
+            reasoning_content=data.get("reasoning_content"),
+            is_error=data.get("is_error", False),
+            tool_result_file=data.get("tool_result_file"),
+            tool_result_chars=data.get("tool_result_chars"),
         )

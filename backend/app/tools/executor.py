@@ -35,27 +35,18 @@ class ToolExecutor:
         tool = self.tool_registry.get(call.name)
 
         if not tool:
-            return Message(
-                role="tool",
-                content=f"找不到工具 {call.name}。",
-                tool_call_id=call.id,
-            )
+            raise LookupError(f"找不到工具 {call.name}。")
 
         #2 执行工具的 execute 方法，得到 ToolResult
-        try:
-            result = await tool.execute(call, context)
-        except Exception as e:
-            return Message(
-                role="tool",
-                content=f"执行工具 {call.name} 时出错：{str(e)}。",
-                tool_call_id=call.id,
-            )
+        # 错误策略由 ToolErrorHandlingMiddleware 负责；执行器保留原始异常。
+        result = await tool.execute(call, context)
 
         #3 把 ToolResult 转成 Message(role="tool")
         message = Message(
             role="tool",
             content=result.content,
             tool_call_id=result.tool_call_id,
+            is_error=result.is_error,
         )
 
         return message

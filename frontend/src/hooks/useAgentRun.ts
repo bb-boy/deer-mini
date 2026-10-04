@@ -34,6 +34,8 @@ export function useAgentRun({ userId, thread, onSettled, onSnapshot }: UseAgentR
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connectionNotice, setConnectionNotice] = useState<string | null>(null);
+  const [modelNoticeMap, setModelNoticeMap] = useState<Record<string, string>>({});
+  const interruptedMessageIdsRef = useRef(new Set<string>());
   const closeStreamRef = useRef<(() => void) | null>(null);
   const generationRef = useRef(0);
   const savedMessageIdsRef = useRef(new Set<string>());
@@ -53,6 +55,8 @@ export function useAgentRun({ userId, thread, onSettled, onSnapshot }: UseAgentR
   }, []);
 
   const clearText = useCallback(() => {
+    interruptedMessageIdsRef.current.clear();
+    setModelNoticeMap({});
     savedMessageIdsRef.current.clear();
     completedMessageIdsRef.current.clear();
     setLiveMessageDetails([]);
@@ -62,6 +66,32 @@ export function useAgentRun({ userId, thread, onSettled, onSnapshot }: UseAgentR
 
   const handleEvent = useCallback((event: RunEvent) => {
     setConnectionNotice(null);
+    if (event.event_type === "model.status" || event.event_type === "subagent.model.status") {
+      const child = event.event_type === "subagent.model.status";
+      const key = child ? `child:${String(event.payload.task_id)}` : `model:${String(event.payload.message_id)}`;
+      setModelNoticeMap((current) => {
+        const next = { ...current };
+        if (event.payload.phase === "retry" && typeof event.payload.message === "string") {
+          next[key] = `${child ? "子任务：" : ""}${event.payload.message}`;
+        } else {
+          delete next[key];
+        }
+        return next;
+      });
+      return;
+    }
+    if (event.event_type === "model.interrupted") {
+      const id = event.payload.message_id;
+      if (typeof id === "string") {
+        interruptedMessageIdsRef.current.add(id);
+        completedMessageIdsRef.current.add(id); // 拒绝失败流的迟到片段。
+        setStreamingMessageId((current) => current === id ? null : current);
+        setReasoningMessageId((current) => current === id ? null : current);
+        setLiveMessageDetails((current) => current.map((message) => message.id === id
+          ? { ...message, generation_interrupted: true } : message));
+      }
+      return;
+    }
     if (event.event_type === "text.delta" || event.event_type === "reasoning.delta") {
       const text = event.payload.text;
       const id = typeof event.payload.message_id === "string" ? event.payload.message_id : "legacy";
@@ -132,6 +162,13 @@ export function useAgentRun({ userId, thread, onSettled, onSnapshot }: UseAgentR
     }
     if (["run.error", "run.timeout", "run.interrupted"].includes(event.event_type)) {
       setError(eventMessage(event));
+      setModelNoticeMap({});
+      // 取消和 Run 总超时也可能留下片段；它们不会触发模型重试。
+      setLiveMessageDetails((current) => current.map((message) => {
+        if (completedMessageIdsRef.current.has(message.id) && !interruptedMessageIdsRef.current.has(message.id)) return message;
+        interruptedMessageIdsRef.current.add(message.id);
+        return { ...message, generation_interrupted: true };
+      }));
     }
   }, []);
 
@@ -160,6 +197,7 @@ export function useAgentRun({ userId, thread, onSettled, onSnapshot }: UseAgentR
         setRunning(false);
         setStreamingMessageId(null);
         setReasoningMessageId(null);
+        setModelNoticeMap({});
         if (event.payload.status_confirmed === true) {
           setCurrentRun((current) => current ? { ...current, status: event.payload.status as RunStatus } : current);
         }
@@ -167,7 +205,11 @@ export function useAgentRun({ userId, thread, onSettled, onSnapshot }: UseAgentR
           await settledRef.current(run.thread_id);
           if (!active()) return;
           setPendingUserMessage(null);
-          clearText();
+          if (interruptedMessageIdsRef.current.size > 0) {
+            setLiveMessageDetails((current) => current.filter((message) => interruptedMessageIdsRef.current.has(message.id)));
+          } else {
+            clearText();
+          }
         } catch (refreshError) {
           if (active()) setConnectionNotice(refreshError instanceof Error ? refreshError.message : "刷新结果失败，已保留收到的文字");
         }
@@ -229,7 +271,13 @@ export function useAgentRun({ userId, thread, onSettled, onSnapshot }: UseAgentR
       await settledRef.current(currentRun.thread_id);
       if (generation !== generationRef.current) return;
       setPendingUserMessage(null);
-      clearText();
+      setModelNoticeMap({});
+      setLiveMessageDetails((current) => current
+        .filter((message) => !completedMessageIdsRef.current.has(message.id) || interruptedMessageIdsRef.current.has(message.id))
+        .map((message) => {
+          interruptedMessageIdsRef.current.add(message.id);
+          return { ...message, generation_interrupted: true };
+        }));
     } catch (cancelError) {
       if (generation === generationRef.current) {
         setError(cancelError instanceof Error ? cancelError.message : "停止运行失败");
@@ -237,7 +285,7 @@ export function useAgentRun({ userId, thread, onSettled, onSnapshot }: UseAgentR
       }
       throw cancelError;
     }
-  }, [clearText, closeStream, connect, currentRun, userId]);
+  }, [closeStream, connect, currentRun, userId]);
 
   const clearTransient = useCallback(() => {
     closeStream();
@@ -264,6 +312,7 @@ export function useAgentRun({ userId, thread, onSettled, onSnapshot }: UseAgentR
   return {
     currentRun, pendingUserMessage, liveAssistantText, liveMessages, toolEvents, running, error, connectionNotice,
     streamingMessageId, reasoningMessageId,
+    modelNotices: Object.values(modelNoticeMap),
     start, resume, cancel, clearTransient,
   };
 }

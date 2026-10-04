@@ -58,6 +58,58 @@ describe("useAgentRun", () => {
     payload: { text: "收到的回答", message_id: "answer" }, sequence: null, created_at: run.created_at,
   };
 
+  it("shows retry notices outside messages and clears them on the next attempt", async () => {
+    const { result } = renderHook(() => useAgentRun({ userId: "alice", thread, onSettled: vi.fn() }));
+    await act(async () => { await result.current.start(input); });
+    const options = openRunStreamMock.mock.calls[0][0];
+    act(() => options.onEvent({ ...delta, event_type: "model.status", payload: {
+      phase: "retry", message_id: "answer", message: "限流，等待 10 秒后重试，第 2/3 次尝试",
+    } }));
+    expect(result.current.modelNotices).toEqual(["限流，等待 10 秒后重试，第 2/3 次尝试"]);
+    expect(result.current.liveMessages).toEqual([]);
+    act(() => options.onEvent({ ...delta, event_type: "model.status", payload: { phase: "attempt", message_id: "answer" } }));
+    expect(result.current.modelNotices).toEqual([]);
+  });
+
+  it("keeps concurrent child retry notices separate", async () => {
+    const { result } = renderHook(() => useAgentRun({ userId: "alice", thread, onSettled: vi.fn() }));
+    await act(async () => { await result.current.start(input); });
+    const options = openRunStreamMock.mock.calls[0][0];
+    act(() => {
+      options.onEvent({ ...delta, event_type: "subagent.model.status", payload: { phase: "retry", task_id: "a", message: "retry A" } });
+      options.onEvent({ ...delta, event_type: "subagent.model.status", payload: { phase: "retry", task_id: "b", message: "retry B" } });
+      options.onEvent({ ...delta, event_type: "subagent.model.status", payload: { phase: "complete", task_id: "a" } });
+    });
+    expect(result.current.modelNotices).toEqual(["子任务：retry B"]);
+  });
+
+  it("retains interrupted partial text after terminal refresh without treating it as complete", async () => {
+    const { result } = renderHook(() => useAgentRun({ userId: "alice", thread, onSettled: vi.fn() }));
+    await act(async () => { await result.current.start(input); });
+    const options = openRunStreamMock.mock.calls[0][0];
+    act(() => {
+      options.onEvent(delta);
+      options.onEvent({ ...delta, event_type: "model.interrupted", payload: { message_id: "answer" } });
+      options.onEvent({ ...delta, payload: { message_id: "answer", text: "late duplicate" } });
+    });
+    await act(async () => { await options.onTerminal({ ...delta, event_type: "run.error", payload: { status: "error", status_confirmed: true } }); });
+    expect(result.current.liveMessages[0]).toMatchObject({ content: "收到的回答", generation_interrupted: true });
+    expect(result.current.streamingMessageId).toBeNull();
+    await act(async () => { await result.current.start(input); });
+    expect(result.current.liveMessages).toEqual([]);
+  });
+
+  it("labels and retains partial output when the user cancels", async () => {
+    const { result } = renderHook(() => useAgentRun({ userId: "alice", thread, onSettled: vi.fn() }));
+    await act(async () => { await result.current.start(input); });
+    const options = openRunStreamMock.mock.calls[0][0];
+    act(() => options.onEvent(delta));
+    await act(async () => { await result.current.cancel(); });
+    expect(result.current.liveMessages[0]).toMatchObject({ content: "收到的回答", generation_interrupted: true });
+    expect(result.current.running).toBe(false);
+    expect(result.current.modelNotices).toEqual([]);
+  });
+
   it("preserves Markdown syntax when SSE splits delimiters across chunks", async () => {
     const { result } = renderHook(() => useAgentRun({ userId: "alice", thread, onSettled: vi.fn() }));
     await act(async () => { await result.current.start(input); });

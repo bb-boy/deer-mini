@@ -49,6 +49,10 @@ class AgentRuntime:
     def _get_owned_thread_and_run(
         self, user_id: str, thread_id: str, run_id: str,
     ) -> tuple[Thread, Run]:
+
+        """
+        获取用户拥有的 Thread 和 Run。
+        """
         thread = self._thread_repository.get(thread_id, user_id)
         if thread is None:
             raise ValueError("Thread 不存在，或不属于当前用户")
@@ -58,7 +62,16 @@ class AgentRuntime:
         return thread, run
 
     def _load_state(self, thread: Thread) -> ThreadState:
+
+        """
+        加载 Thread 的状态。
+        输入是一个 Thread 对象，输出是一个 ThreadState 对象，就是这个会话的message历史
+        """
+
+        #获取这个对话的checkpoint，如果有就返回一个checkpoint对象，如果没有就返回none
         checkpoint = self._checkpoint_repository.latest(thread.id, thread.user_id)
+
+        # 如果有可用的 checkpoint，就使用它的状态；否则，创建一个新的 ThreadState，
         if checkpoint is not None:
             return checkpoint.state
         return ThreadState(

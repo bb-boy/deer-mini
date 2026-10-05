@@ -11,6 +11,10 @@ class ThreadPaths:
         if not thread_dir.is_absolute():
             raise ValueError("Thread 目录必须是服务端提供的绝对路径")
 
+        # 在 resolve 消除链接信息之前检查 Thread 本身及其祖先。
+        if ".." in thread_dir.parts or any(path.is_symlink() for path in (thread_dir, *thread_dir.parents)):
+            raise ValueError("Thread 目录及其祖先不能是符号链接")
+
         # 真实服务器目录，来自当前 Thread。
         self.thread_dir = thread_dir.resolve()
         self.workspace_path = self.thread_dir / "workspace"

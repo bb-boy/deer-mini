@@ -46,6 +46,7 @@ class Checkpoint:
     id: int | None = None  #在python中创建的checkpoint对象，id为None，写入数据库后，id为整数
     
     created_at: str = field(default_factory=utc_now)
+    kind: Literal["execution", "turn_start", "restore"] = "execution"
 
 
 

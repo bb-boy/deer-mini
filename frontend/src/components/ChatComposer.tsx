@@ -346,7 +346,7 @@ export function ChatComposer({
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragging(false);
-    if (!disabled && event.dataTransfer.files.length > 0) {
+    if (!disabled && !running && event.dataTransfer.files.length > 0) {
       handleFiles(event.dataTransfer.files);
     }
   }
@@ -358,7 +358,7 @@ export function ChatComposer({
         className="composer-shell"
         onDragEnter={(event) => {
           event.preventDefault();
-          if (!disabled) setDragging(true);
+          if (!disabled && !running) setDragging(true);
         }}
         onDragOver={(event) => event.preventDefault()}
         onDragLeave={(event) => {
@@ -438,7 +438,7 @@ export function ChatComposer({
                 type="file"
                 multiple
                 aria-label="添加附件"
-                disabled={disabled || !onAttach}
+                disabled={disabled || running || !onAttach}
                 onChange={handleFileInput}
               />
             </label>

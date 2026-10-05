@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createRun,
+  listRestorePoints,
+  previewRestorePoint,
+  restoreThread,
+  getRestoreOperation,
   deleteThread,
   getLatestState,
   listThreads,
@@ -14,6 +18,25 @@ afterEach(() => {
 });
 
 describe("API client", () => {
+  it("uses owned restore endpoints and preserves the idempotent operation input", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const input = { operation_id: "operation-1", restore_point_id: "point/1", revision: 7, fingerprint: "abc" };
+    await listRestorePoints("thread/1", "alice@example.com");
+    await previewRestorePoint("thread/1", "point/1", "alice@example.com");
+    await restoreThread("thread/1", "alice@example.com", input);
+    await getRestoreOperation("thread/1", "operation-1", "alice@example.com");
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/threads/thread%2F1/restore-points?user_id=alice%40example.com",
+      "/api/threads/thread%2F1/restore-points/point%2F1/preview?user_id=alice%40example.com",
+      "/api/threads/thread%2F1/restore?user_id=alice%40example.com",
+      "/api/threads/thread%2F1/restore-operations/operation-1?user_id=alice%40example.com",
+    ]);
+    expect(fetchMock.mock.calls[1][1].method).toBe("POST");
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual(input);
+  });
   it("encodes user id and pagination when listing threads", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),

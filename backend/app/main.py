@@ -22,8 +22,10 @@ async def lifespan(app: FastAPI):
     app.state.stream_bridge = stream_bridge
     coordinator = RunCoordinator(stream_bridge)
     app.state.run_coordinator = coordinator
+    app.state.thread_operations = coordinator.operations
     try:
         await coordinator.start()
+        await coordinator.recover_file_operations()
         # 当前是单进程 Mini：启动前仍处于 pending/running 的记录，
         # 已经失去负责执行它们的 asyncio Task，需要先统一收尾。
         await coordinator.recover_orphaned_runs()

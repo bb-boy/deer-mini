@@ -14,10 +14,19 @@ const uploadWorkspaceFileMock = vi.fn();
 const startAgentRunMock = vi.fn();
 const renameThreadMock = vi.fn();
 const deleteThreadMock = vi.fn();
+const clearTransientMock = vi.fn();
+const listRestorePointsMock = vi.fn();
+const previewRestorePointMock = vi.fn();
+const restoreThreadMock = vi.fn();
+let running = false;
 type AgentRunOptions = Parameters<typeof import("./hooks/useAgentRun").useAgentRun>[0];
 let agentRunOptions: AgentRunOptions;
 
-vi.mock("./api/client", () => ({
+vi.mock("./api/client", async (original) => ({
+  ...await original<typeof import("./api/client")>(),
+  listRestorePoints: (...args: unknown[]) => listRestorePointsMock(...args),
+  previewRestorePoint: (...args: unknown[]) => previewRestorePointMock(...args),
+  restoreThread: (...args: unknown[]) => restoreThreadMock(...args),
   getModels: (...args: unknown[]) => getModelsMock(...args),
   listThreads: (...args: unknown[]) => listThreadsMock(...args),
   createThread: (...args: unknown[]) => createThreadMock(...args),
@@ -39,14 +48,14 @@ vi.mock("./hooks/useAgentRun", () => ({
     liveAssistantText: "",
     liveMessages: [],
     toolEvents: [],
-    running: false,
+    running,
     error: null,
     connectionNotice: null,
     modelNotices: [],
     start: (...args: unknown[]) => startAgentRunMock(...args),
     resume: vi.fn(),
     cancel: vi.fn(),
-    clearTransient: vi.fn(),
+    clearTransient: clearTransientMock,
     };
   },
 }));
@@ -90,6 +99,12 @@ const checkpoint: Checkpoint = {
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
+  running = false;
+  clearTransientMock.mockReset();
+  listRestorePointsMock.mockReset().mockResolvedValue([{ id: "point-1", run_id: "run-1", kind: "turn_start", message: "第一轮问题", created_at: "2026-10-05T00:00:00Z", available: true, unavailable_reason: null }]);
+  previewRestorePointMock.mockReset().mockResolvedValue({ restore_point_id: "point-1", revision: 2, fingerprint: "abc", created: [], modified: [], deleted: [], removed_messages: 1, target_messages: 0, current_messages: 1 });
+  restoreThreadMock.mockReset().mockResolvedValue({ operation_id: "operation-1", status: "committed", cleaned: true });
   window.history.replaceState(null, "", "/");
   getModelsMock.mockReset().mockResolvedValue({
     default_model: "ustc-deepseek-flash",
@@ -110,6 +125,96 @@ beforeEach(() => {
 });
 
 describe("App", () => {
+  it("restores messages and file cards while invalidating an older refresh and file preview", async () => {
+    const file = { name: "report.pdf", relative_path: "outputs/report.pdf", size: 8, modified_at: thread.updated_at };
+    listWorkspaceFilesMock.mockResolvedValue([file]);
+    render(<App />);
+    await screen.findByText("历史回答");
+    fireEvent.click(screen.getByRole("tab", { name: /文件/, hidden: true }));
+    fireEvent.click(screen.getByRole("button", { name: "预览 report.pdf", hidden: true }));
+    expect(screen.getByRole("region", { name: "文件预览 report.pdf", hidden: true })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("添加附件"), { target: { files: [new File(["queued"], "queued.txt")] } });
+    expect(screen.getByLabelText("待上传附件")).toBeTruthy();
+
+    let releaseFiles!: (files: WorkspaceFile[]) => void;
+    listWorkspaceFilesMock.mockImplementationOnce(() => new Promise<WorkspaceFile[]>((resolve) => { releaseFiles = resolve; }));
+    let oldRefresh!: Promise<void> | void;
+    act(() => { oldRefresh = agentRunOptions.onSettled(thread.id); });
+    fireEvent.click(screen.getByRole("button", { name: "恢复对话与文件" }));
+    fireEvent.click(await screen.findByRole("button", { name: /预览恢复：第一轮问题/ }));
+    await screen.findByText("将撤销 1 条消息，恢复后保留 0 条消息。");
+    getLatestStateMock.mockResolvedValue({ ...checkpoint, state: { ...checkpoint.state, messages: [] } });
+    listWorkspaceFilesMock.mockResolvedValue([file]);
+    fireEvent.click(screen.getByRole("button", { name: "确认恢复消息与文件" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "恢复对话与文件" })).toBeNull());
+    expect(clearTransientMock).toHaveBeenCalled();
+    expect(screen.queryByText("历史回答")).toBeNull();
+    expect(screen.queryByLabelText("待上传附件")).toBeNull();
+    expect(screen.queryByRole("region", { name: "文件预览 report.pdf", hidden: true })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: /文件/, hidden: true }));
+    expect(screen.getByRole("button", { name: "预览 report.pdf", hidden: true })).toBeTruthy();
+    await act(async () => { releaseFiles([{ ...file, name: "stale.pdf", relative_path: "outputs/stale.pdf" }]); await oldRefresh; });
+    expect(screen.queryByText("历史回答")).toBeNull();
+    expect(screen.queryByText("stale.pdf")).toBeNull();
+  });
+
+  it("does not apply a restore response after switching to another thread", async () => {
+    const other = { ...thread, id: "thread-2", title: "另一段对话" };
+    listThreadsMock.mockResolvedValue([thread, other]);
+    getLatestStateMock.mockImplementation((id: string) => Promise.resolve({ ...checkpoint, state: { ...checkpoint.state, messages: [{ ...checkpoint.state.messages[0], content: id === thread.id ? "历史回答" : "另一段回答" }] } }));
+    let finish!: (value: unknown) => void;
+    restoreThreadMock.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    render(<App />); await screen.findByText("历史回答");
+    fireEvent.click(screen.getByRole("button", { name: "恢复对话与文件" }));
+    fireEvent.click(await screen.findByRole("button", { name: /预览恢复：第一轮问题/ }));
+    await screen.findByRole("button", { name: "确认恢复消息与文件" });
+    fireEvent.click(screen.getByRole("button", { name: "确认恢复消息与文件" }));
+    await waitFor(() => expect(restoreThreadMock).toHaveBeenCalledTimes(1));
+    act(() => { window.location.hash = "thread=thread-2"; window.dispatchEvent(new HashChangeEvent("hashchange")); });
+    await screen.findByText("另一段回答");
+    clearTransientMock.mockClear();
+    await act(async () => { finish({ status: "committed", cleaned: true }); });
+    expect(screen.getByText("另一段回答")).toBeTruthy();
+    expect(clearTransientMock).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("给 Agent 的消息") as HTMLTextAreaElement).disabled).toBe(false);
+  });
+
+  it("preserves an unflushed draft when switching threads", async () => {
+    const other = { ...thread, id: "thread-2", title: "另一段对话" };
+    listThreadsMock.mockResolvedValue([thread, other]);
+    render(<App />); await screen.findByText("历史回答");
+    fireEvent.change(screen.getByLabelText("给 Agent 的消息"), { target: { value: "未发送草稿" } });
+    fireEvent.click(screen.getByRole("button", { name: /另一段对话/ }));
+    expect(sessionStorage.getItem(`deer-mini-draft:${thread.user_id}:${thread.id}`)).toBe("未发送草稿");
+  });
+
+  it("ignores an older refresh failure after restoring the conversation", async () => {
+    render(<App />); await screen.findByText("历史回答");
+    let rejectFiles!: (error: Error) => void;
+    listWorkspaceFilesMock.mockImplementationOnce(() => new Promise<WorkspaceFile[]>((_resolve, reject) => { rejectFiles = reject; }));
+    let olderRefresh!: Promise<void> | void;
+    act(() => { olderRefresh = agentRunOptions.onSettled(thread.id); });
+    fireEvent.click(screen.getByRole("button", { name: "恢复对话与文件" }));
+    fireEvent.click(await screen.findByRole("button", { name: /预览恢复：第一轮问题/ }));
+    await screen.findByRole("button", { name: "确认恢复消息与文件" });
+    fireEvent.click(screen.getByRole("button", { name: "确认恢复消息与文件" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "恢复对话与文件" })).toBeNull());
+    await act(async () => {
+      rejectFiles(new Error("旧文件刷新失败"));
+      await Promise.resolve(olderRefresh).catch(() => undefined);
+    });
+    expect(screen.queryByText("旧文件刷新失败")).toBeNull();
+  });
+
+  it("prevents uploads while a run is active and explains why", async () => {
+    running = true;
+    render(<App />);
+    await screen.findByText("历史回答");
+    fireEvent.click(screen.getByRole("tab", { name: /文件/, hidden: true }));
+    expect((screen.getByLabelText("上传文件") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("添加附件") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText(/运行期间不能上传文件，请等待运行结束/)).toBeTruthy();
+  });
   it("clears the previous thread's file cards while the next thread loads", async () => {
     const otherThread = { ...thread, id: "thread-2", title: "另一段对话" };
     const oldFile = { name: "previous.txt", relative_path: "uploads/previous.txt", size: 8, modified_at: thread.updated_at };

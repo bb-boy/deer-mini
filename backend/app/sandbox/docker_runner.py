@@ -501,6 +501,22 @@ class DockerCommandRunner:
                 # 完整 source 字段用双引号包住，因此 /data/thread,1/workspace 中的逗号不会分错字段。
                 f'type=bind,"{source_field}",target={virtual_path}',
             ])
+        # 工具历史属于消息持久化资料，应用可写，Bash 只能读。
+        history = paths.resolve_agent_path("workspace/.tool-results")
+        history.mkdir(mode=0o700, exist_ok=True)
+        if not history.is_dir():
+            raise ValueError("历史结果路径必须是目录")
+        import stat as file_stat
+        for directory, names, files in os.walk(history, followlinks=False):
+            for name in [*names, *files]:
+                metadata = (Path(directory) / name).lstat()
+                if not file_stat.S_ISDIR(metadata.st_mode) and (
+                    not file_stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+                ):
+                    raise ValueError("历史结果目录不能包含链接或特殊文件")
+        history_source = f"source={history}".replace('"', '""')
+        mount_args.extend(["--mount",
+            f'type=bind,"{history_source}",target=/mnt/user-data/workspace/.tool-results,readonly'])
         # 条件表达式：开关为真时用 bridge 网络，为假时用 none 网络。
         network_mode = "bridge" if self.config.network_enabled else "none"
         # 每个列表元素都会作为一个独立参数交给服务器上的 Docker 程序。

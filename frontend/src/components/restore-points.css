@@ -1,0 +1,20 @@
+.restore-dialog { width: min(100%, 760px); max-height: calc(100dvh - 40px); overflow-y: auto; color: var(--foreground); }
+.restore-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.restore-scope { padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--muted); font-size: 12px; line-height: 1.65; }
+.restore-scope p { margin: 0; }
+.restore-point-list { display: grid; gap: 8px; max-height: 230px; overflow: auto; padding: 0; margin: 16px 0; list-style: none; }
+.restore-point-list button { display: grid; width: 100%; grid-template-columns: 1fr auto; gap: 5px 12px; padding: 12px; text-align: left; color: inherit; background: var(--card); border: 1px solid var(--border); border-radius: 9px; }
+.restore-point-list button[aria-pressed="true"] { border-color: var(--foreground); }
+.restore-point-list button:disabled { opacity: .55; cursor: not-allowed; }
+.restore-point-list strong { grid-column: 1; overflow-wrap: anywhere; font-size: 13px; font-weight: 500; }
+.restore-point-list time { grid-row: 1; grid-column: 2; font-size: 10px; color: var(--muted-foreground); }
+.restore-point-kind { font-size: 10px; color: var(--muted-foreground); }
+.restore-point-list small { grid-column: 1 / -1; font-size: 11px; }
+.restore-preview { border-top: 1px solid var(--border); padding-top: 14px; font-size: 12px; }
+.restore-preview h3 { margin: 0 0 8px; font-size: 14px; }
+.restore-file-changes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.restore-file-changes h4 { margin: 0 0 6px; font-weight: 500; }
+.restore-file-changes ul { padding-left: 16px; max-height: 150px; overflow: auto; overflow-wrap: anywhere; }
+.restore-status, .restore-error { margin-top: 16px !important; line-height: 1.65; }
+.restore-error { color: var(--destructive, #a33) !important; }
+@media (max-width: 560px) { .restore-file-changes { grid-template-columns: 1fr; } .restore-dialog { padding: 18px; } }

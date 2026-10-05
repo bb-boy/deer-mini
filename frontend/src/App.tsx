@@ -24,6 +24,7 @@ import { ChatComposer, type SendMessageInput } from "./components/ChatComposer";
 import { ContextPanel, type ContextTab } from "./components/ContextPanel";
 import { Icon } from "./components/Icon";
 import { MessageList } from "./components/MessageList";
+import { RestorePoints, restoreStorageKey } from "./components/RestorePoints";
 import { ThreadSidebar } from "./components/ThreadSidebar";
 import { useAgentRun } from "./hooks/useAgentRun";
 const DEFAULT_USER_ID = "demo-user";
@@ -68,6 +69,12 @@ export default function App() {
   const [modelCatalog, setModelCatalog] = useState<ModelsResponse | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoredVersion, setRestoredVersion] = useState(0);
+  const restoreBusyRef = useRef(false);
+  const viewGenerationRef = useRef(0);
+  const uploadGenerationRef = useRef(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readInitialSidebarCollapsed);
   const [contextPanelOpen, setContextPanelOpen] = useState(() =>
     readInitialContextOpen(),
@@ -94,8 +101,24 @@ export default function App() {
   useLayoutEffect(() => {
     // 新对话显示前清空旧卡片，避免旧文件名配上新对话的下载地址。
     fileSelectionRef.current = { userId, threadId: selectedThreadId };
+    viewGenerationRef.current += 1;
+    threadRequestGenerationRef.current += 1;
+    messageRequestGenerationRef.current += 1;
+    setRestoreOpen(false);
+    let pendingRestore = false;
+    try { pendingRestore = !!selectedThreadId && !!sessionStorage.getItem(restoreStorageKey(userId, selectedThreadId)); }
+    catch { /* 浏览器存储不可用时，后端仍验证恢复期间的操作准入。 */ }
+    restoreBusyRef.current = pendingRestore;
+    setRestoreBusy(pendingRestore);
     setFiles([]);
   }, [userId, selectedThreadId]);
+  useEffect(() => () => {
+    userRequestGenerationRef.current += 1;
+    threadRequestGenerationRef.current += 1;
+    messageRequestGenerationRef.current += 1;
+    viewGenerationRef.current += 1;
+    uploadGenerationRef.current += 1;
+  }, []);
   useEffect(() => {
     let cancelled = false;
     let generation = 0;
@@ -198,6 +221,7 @@ export default function App() {
   }, [userId]);
   const loadThreadData = useCallback(
     async (threadId: string) => {
+      if (fileSelectionRef.current.threadId !== threadId || fileSelectionRef.current.userId !== userId) return [];
       const generation = userRequestGenerationRef.current;
       const threadGeneration = ++threadRequestGenerationRef.current;
       const messageGeneration = ++messageRequestGenerationRef.current;
@@ -208,7 +232,8 @@ export default function App() {
       ]);
       if (
         generation !== userRequestGenerationRef.current ||
-        threadGeneration !== threadRequestGenerationRef.current
+        threadGeneration !== threadRequestGenerationRef.current ||
+        fileSelectionRef.current.threadId !== threadId || fileSelectionRef.current.userId !== userId
       ) {
         return [];
       }
@@ -224,9 +249,12 @@ export default function App() {
   );
   const handleSettled = useCallback(
     async (threadId: string) => {
+      const generation = viewGenerationRef.current;
+      if (fileSelectionRef.current.threadId !== threadId) return;
       try {
         await Promise.all([refreshThreads(), loadThreadData(threadId)]);
       } catch (error) {
+        if (generation !== viewGenerationRef.current) return;
         setPageError(error instanceof Error ? error.message : "刷新运行结果失败");
         throw error;
       }
@@ -234,7 +262,7 @@ export default function App() {
     [loadThreadData, refreshThreads],
   );
   const handleSnapshot = useCallback((threadId: string, checkpoint: Checkpoint | null) => {
-    if (threadId !== selectedThreadId) return;
+    if (threadId !== selectedThreadId || restoreBusyRef.current) return;
     messageRequestGenerationRef.current += 1;
     setMessages(checkpoint?.state.messages ?? []);
   }, [selectedThreadId]);
@@ -280,6 +308,7 @@ export default function App() {
   useEffect(() => {
     const activeRun = runs.find((run) => run.status === "pending" || run.status === "running");
     if (
+      !restoreBusy &&
       activeRun &&
       activeRun.thread_id === selectedThreadId &&
       activeRun.id !== agentRun.currentRun?.id &&
@@ -288,7 +317,7 @@ export default function App() {
       resumedRunIds.current.add(activeRun.id);
       agentRun.resume(activeRun);
     }
-  }, [agentRun, runs, selectedThreadId]);
+  }, [agentRun, runs, selectedThreadId, restoreBusy]);
   useEffect(() => {
     if (agentRun.running && agentRun.toolEvents.length > 0) {
       setContextTab("activity");
@@ -297,6 +326,7 @@ export default function App() {
   }, [agentRun.running, agentRun.toolEvents.length]);
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
+      if (restoreOpen) return;
       if (event.key === "Escape" && agentRun.running) {
         event.preventDefault();
         void agentRun.cancel();
@@ -319,7 +349,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [agentRun.cancel, agentRun.running, contextPanelOpen, helpOpen, sidebarCollapsed]);
+  }, [agentRun.cancel, agentRun.running, contextPanelOpen, helpOpen, sidebarCollapsed, restoreOpen]);
   function switchUser(nextUserId: string) {
     if (agentRun.running) {
       setPageError("请先停止当前运行，再切换用户");
@@ -380,6 +410,7 @@ export default function App() {
     if (window.innerWidth <= 720) setSidebarCollapsed(true);
   }
   function handleAttach(file: File) {
+    if (restoreBusyRef.current || restoreOpen || agentRun.running) return;
     setPendingAttachments((current) => [...current, file]);
   }
   function removeAttachment(index: number) {
@@ -405,6 +436,7 @@ export default function App() {
     }
   }
   async function handleDeleteThread(threadId: string) {
+    if (threadId === selectedThreadId && restoreBusyRef.current) throw new Error("恢复结果尚未确认，暂时不能删除此对话");
     setPageError(null);
     const deletingSelected = selectedThreadId === threadId;
     await deleteThreadRequest(threadId, userId);
@@ -515,6 +547,7 @@ export default function App() {
     window.setTimeout(() => setCopyNotice(false), 1800);
   }
   async function handleSend(input: SendMessageInput) {
+    if (restoreBusyRef.current || restoreOpen || agentRun.running || uploading) return;
     setPageError(null);
     messageRequestGenerationRef.current += 1;
     try {
@@ -565,11 +598,13 @@ export default function App() {
     }
   }
   async function handleUpload(file: File) {
-    if (!selectedThread) return;
+    if (!selectedThread || restoreBusyRef.current || restoreOpen || agentRun.running) return;
+    const uploadGeneration = ++uploadGenerationRef.current;
     const uploadThreadId = selectedThread.id;
     const uploadUserId = userId;
     // 上传期间可以切换对话；请求回来时，只刷新它所属的当前对话。
     const isCurrentThread = () =>
+      uploadGeneration === uploadGenerationRef.current &&
       fileSelectionRef.current.threadId === uploadThreadId &&
       fileSelectionRef.current.userId === uploadUserId;
     setContextTab("files");
@@ -586,8 +621,37 @@ export default function App() {
         setPageError(error instanceof Error ? error.message : "上传文件失败");
       }
     } finally {
-      setUploading(false);
+      if (uploadGeneration === uploadGenerationRef.current) setUploading(false);
     }
+  }
+  function handleRestoreBusy(busy: boolean) {
+    restoreBusyRef.current = busy;
+    setRestoreBusy(busy);
+  }
+  async function handleRestored() {
+    if (!selectedThreadId) return;
+    const threadId = selectedThreadId;
+    const generation = ++viewGenerationRef.current;
+    // 淘汰旧 SSE、HTTP 与上传回调，再读取恢复后的当前状态。
+    userRequestGenerationRef.current += 1;
+    threadRequestGenerationRef.current += 1;
+    messageRequestGenerationRef.current += 1;
+    uploadGenerationRef.current += 1;
+    agentRun.clearTransient();
+    resumedRunIds.current.clear();
+    setMessages([]);
+    setRuns([]);
+    setFiles([]);
+    setPendingAttachments([]);
+    setUploading(false);
+    setSuggestedPrompt(null);
+    setPageError(null);
+    setRestoredVersion((value) => value + 1);
+    try { sessionStorage.removeItem(`deer-mini-draft:${userId}:${threadId}`); }
+    catch { /* 草稿存储不可用不影响已提交的恢复。 */ }
+    await Promise.all([refreshThreads(), loadThreadData(threadId)]);
+    if (generation !== viewGenerationRef.current) return;
+    setLoadingThread(false);
   }
   const visibleError = pageError || agentRun.error || modelError;
   return (
@@ -649,6 +713,7 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
+            {selectedThread ? <button type="button" className="header-panel-button" aria-label="恢复对话与文件" disabled={uploading || loadingThread} onClick={() => setRestoreOpen(true)}><Icon name="clock" size={16} /><span>恢复</span></button> : null}
             {selectedThread ? (
               <span className={`thread-state ${agentRun.running ? "running" : "idle"}`}>
                 <span className="state-dot" />
@@ -683,6 +748,8 @@ export default function App() {
             <span className="notice-pulse" /><span>{notice}</span>
           </div>
         ))}
+        {restoreBusy && !restoreOpen ? <div className="notice connection-notice" role="status">恢复结果尚未确认，请打开恢复面板继续查询。确认前不能发送任务或上传文件。</div> : null}
+        {agentRun.running ? <div className="notice connection-notice" role="status">运行期间不能上传文件，请等待运行结束。</div> : null}
         {copyNotice ? <div className="copy-toast" role="status">已复制到剪贴板</div> : null}
         <div className="messages-scroll">
           <div className="messages-frame">
@@ -705,9 +772,10 @@ export default function App() {
           </div>
         </div>
         <ChatComposer
+          key={restoredVersion}
           models={modelCatalog?.models ?? []}
           defaultModelName={modelCatalog?.default_model ?? ""}
-          disabled={loadingThreads || uploading}
+          disabled={loadingThreads || loadingThread || uploading || restoreBusy || restoreOpen}
           running={agentRun.running}
           onSend={handleSend}
           onCancel={agentRun.cancel}
@@ -751,6 +819,7 @@ export default function App() {
         />
       ) : null}
       <ContextPanel
+        key={`${userId}:${selectedThreadId ?? "new"}:${restoredVersion}`}
         open={contextPanelOpen}
         resizing={resizingContext}
         tab={contextTab}
@@ -758,7 +827,7 @@ export default function App() {
         toolEvents={agentRun.toolEvents}
         files={files}
         selectedThread={selectedThread}
-        uploading={uploading}
+        uploading={uploading || restoreBusy || restoreOpen || agentRun.running}
         onClose={() => setContextPanelOpen(false)}
         onResizeStart={() => setResizingContext(true)}
         onTabChange={setContextTab}
@@ -769,6 +838,16 @@ export default function App() {
         }
         onUpload={handleUpload}
       />
+      {restoreOpen && selectedThreadId ? <RestorePoints
+        key={`${userId}:${selectedThreadId}`}
+        threadId={selectedThreadId}
+        userId={userId}
+        running={agentRun.running}
+        onCancelRun={agentRun.cancel}
+        onRestored={handleRestored}
+        onBusyChange={handleRestoreBusy}
+        onClose={() => setRestoreOpen(false)}
+      /> : null}
     </div>
   );
 }

@@ -29,6 +29,10 @@ from app.sandbox.manager import (
     cleanup_orphaned_thread_sandboxes,
 )
 from app.services.run_service import RunService
+from app.services.file_checkpoint_service import FileCheckpointService
+from app.services.thread_operations import ThreadOperations
+from app.repositories.thread_repository import ThreadRepository
+from app.repositories.sandbox_safety_repository import SandboxSafetyRepository
 from app.services.thread_service import (
     ThreadService,
     cleanup_pending_thread_deletions,
@@ -111,6 +115,10 @@ class RunCoordinator:
             self._sandbox_manager = self._bash_runner
         # 按 run_id 保存后台任务，取消接口才能找到指定的 Agent Loop。
         self._tasks: dict[str, asyncio.Task[ThreadState]] = {}
+        self._run_owners: dict[str, tuple[str, str]] = {}
+        self._sandbox_started = False
+        self.operations = ThreadOperations()
+        self.file_checkpoints = FileCheckpointService()
 
     def _build_tool_registry(self) -> ToolRegistry:
         """创建一次 Run 使用的工具表，避免在不同入口重复开关逻辑。"""
@@ -128,7 +136,68 @@ class RunCoordinator:
         registry.register(WriteTodosTool())
         return registry
 
-    async def create_and_start_run(
+    def _owned_file_thread(self, user_id: str, thread_id: str):
+        thread = ThreadRepository().get(thread_id, user_id)
+        if thread is None:
+            raise LookupError("Thread 不存在")
+        if self.file_checkpoints.repo.operations(thread, pending_only=True):
+            raise RuntimeError("对话文件恢复尚待完成，暂不能开始新操作")
+        return thread
+
+    async def create_and_start_run(self, *, user_id: str, thread_id: str,
+                                   message: str, model_name: str, thinking_enabled: bool,
+                                   reasoning_effort: str | None) -> Run:
+        with self.operations.write(user_id, thread_id, "run"):
+            self._owned_file_thread(user_id, thread_id)
+            result = await self._create_and_start_run(user_id=user_id, thread_id=thread_id,
+                message=message, model_name=model_name, thinking_enabled=thinking_enabled,
+                reasoning_effort=reasoning_effort)
+            self.operations.register_run(user_id, thread_id, result.id)
+            return result
+
+    async def preview_restore(self, *, user_id: str, thread_id: str, point_id: str) -> dict:
+        # 预览也需要一致文件状态。先停止运行后可重新取得稳定的版本。
+        with self.operations.write(user_id, thread_id, "preview"):
+            thread = self._owned_file_thread(user_id, thread_id)
+            if self._sandbox_manager is not None:
+                await self._sandbox_manager.stop_thread(user_id=user_id, thread_id=thread_id)
+            return await run_sync(self.file_checkpoints.preview, thread, point_id)
+
+    async def restore_thread(self, *, user_id: str, thread_id: str, operation_id: str,
+                             point_id: str, revision: int, fingerprint: str) -> dict:
+        thread = ThreadRepository().get(thread_id, user_id)
+        if thread is None:
+            raise LookupError("Thread 不存在")
+        previous = self.file_checkpoints.repo.operation(thread, operation_id)
+        if previous is not None:
+            if (previous['restore_point_id'], previous['expected_revision'], previous['fingerprint']) != (
+                    point_id, revision, fingerprint):
+                raise RuntimeError("恢复操作编号已用于不同请求")
+            return previous
+        with self.operations.write(user_id, thread_id, "restore", allow_run=True):
+            self._owned_file_thread(user_id, thread_id)
+            # 独占标志已登记；取消和 Runtime 收尾不需要这把操作准入。
+            for run in self._run_service.list_inflight_runs():
+                if run.user_id == user_id and run.thread_id == thread_id:
+                    await self.cancel_run(user_id=user_id, thread_id=thread_id, run_id=run.id)
+            if self._sandbox_manager is not None:
+                try:
+                    await self._sandbox_manager.stop_thread(user_id=user_id, thread_id=thread_id)
+                except BaseException:
+                    self.operations.block(user_id, thread_id)
+                    raise
+            try:
+                return await run_sync(self.file_checkpoints.restore, thread, operation_id,
+                                      point_id, revision, fingerprint)
+            finally:
+                if self.file_checkpoints.repo.operations(thread, pending_only=True):
+                    self.operations.block(user_id, thread_id)
+
+    async def recover_file_operations(self) -> None:
+        for user_id, thread_id in await run_sync(self.file_checkpoints.recover_pending):
+            self.operations.block(user_id, thread_id)
+
+    async def _create_and_start_run(
         self,
         *,
         user_id: str,
@@ -185,7 +254,9 @@ class RunCoordinator:
             )
             task = asyncio.create_task(
                 AgentRuntime(
-                    self._stream_bridge, sandbox_lifecycle=self._sandbox_manager
+                    self._stream_bridge, sandbox_lifecycle=self._sandbox_manager,
+                    file_checkpoints=self.file_checkpoints,
+                    on_sandbox_failure=lambda: self.operations.block(user_id, thread_id),
                 ).run(
                     user_id=user_id,
                     thread_id=thread_id,
@@ -201,6 +272,7 @@ class RunCoordinator:
             raise
 
         self._tasks[run.id] = task
+        self._run_owners[run.id] = (user_id, thread_id)
         task.add_done_callback(
             lambda finished_task, run_id=run.id: self._consume_finished_task(
                 run_id,
@@ -344,11 +416,18 @@ class RunCoordinator:
     async def start(self) -> None:
         await cleanup_pending_thread_deletions()
         if self._sandbox_manager is not None:
+            await run_sync(SandboxSafetyRepository().mark_active)
             await self._sandbox_manager.start()
+            self._sandbox_started = True
         elif self._uses_environment_bash_config:
             await cleanup_orphaned_thread_sandboxes()
 
     async def delete_thread(self, *, user_id: str, thread_id: str) -> None:
+        with self.operations.write(user_id, thread_id, "delete"):
+            self._owned_file_thread(user_id, thread_id)
+            await self._delete_thread(user_id=user_id, thread_id=thread_id)
+
+    async def _delete_thread(self, *, user_id: str, thread_id: str) -> None:
         async def delete_workspace() -> None:
             # 删除容器会 await；回来后重新确认没有新建的 pending Run。
             if any(
@@ -378,6 +457,8 @@ class RunCoordinator:
         await EventRecorder.shutdown_writers()
         if self._sandbox_manager is not None:
             await self._sandbox_manager.close()
+            if self._sandbox_started:
+                await run_sync(SandboxSafetyRepository().mark_clear)
 
     def _consume_finished_task(
         self,
@@ -388,6 +469,9 @@ class RunCoordinator:
         """移除已完成任务，并读取异常，避免 asyncio 输出未处理警告。"""
         if self._tasks.get(run_id) is task:
             self._tasks.pop(run_id, None)
+            owner = self._run_owners.pop(run_id, None)
+            if owner is not None:
+                self.operations.release_run(*owner, run_id)
         if task.cancelled():
             return
 

@@ -19,6 +19,7 @@ from app.runtime.event_recorder import EventRecorder
 from app.runtime.stream_bridge import MemoryStreamBridge
 from app.sandbox.base import SandboxLifecycle
 from app.services.run_service import RunService
+from app.services.file_checkpoint_service import FileCheckpointService
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ class AgentRuntime:
         run_repository: RunRepository | None = None,
         run_service: RunService | None = None,
         sandbox_lifecycle: SandboxLifecycle | None = None,
+        file_checkpoints: FileCheckpointService | None = None,
+        on_sandbox_failure: Callable[[], None] | None = None,
     ) -> None:
         self._stream_bridge = stream_bridge
         self._checkpoint_repository = checkpoint_repository or CheckpointRepository()
@@ -45,6 +48,8 @@ class AgentRuntime:
         self._run_repository = run_repository or RunRepository()
         self._run_service = run_service or RunService()
         self._sandbox_lifecycle = sandbox_lifecycle
+        self._file_checkpoints = file_checkpoints
+        self._on_sandbox_failure = on_sandbox_failure
 
     def _get_owned_thread_and_run(
         self, user_id: str, thread_id: str, run_id: str,
@@ -130,9 +135,16 @@ class AgentRuntime:
             if sandbox_released or run is None:
                 return
             if self._sandbox_lifecycle is not None:
-                await self._sandbox_lifecycle.end_run(
-                    user_id=user_id, thread_id=thread_id, run_id=run_id,
-                )
+                try:
+                    await self._sandbox_lifecycle.end_run(
+                        user_id=user_id, thread_id=thread_id, run_id=run_id,
+                    )
+                    if self._file_checkpoints is not None:
+                        await self._sandbox_lifecycle.stop_thread(user_id=user_id, thread_id=thread_id)
+                except BaseException:
+                    if self._on_sandbox_failure is not None:
+                        self._on_sandbox_failure()
+                    raise
             sandbox_released = True
 
         try:
@@ -140,6 +152,15 @@ class AgentRuntime:
             assert thread is not None and run is not None
             save_checkpoint = await self._create_checkpoint_saver(user_id, thread, run)
             state = await run_sync(self._load_state, thread)
+            if self._file_checkpoints is not None:
+                if self._sandbox_lifecycle is not None:
+                    try:
+                        await self._sandbox_lifecycle.stop_thread(user_id=user_id, thread_id=thread_id)
+                    except BaseException:
+                        if self._on_sandbox_failure is not None:
+                            self._on_sandbox_failure()
+                        raise
+                await run_sync(self._file_checkpoints.capture_turn, thread, run, state, user_message)
             state.messages.append(Message(role="user", content=user_message))
             await save_checkpoint(state)
             if not await run_sync(self._run_service.start_run, run_id, user_id):

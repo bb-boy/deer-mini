@@ -100,3 +100,7 @@ class SandboxLifecycle(Protocol):
         """
         # 真正的归还和闲置计时在 ThreadSandboxManager.end_run() 中完成。
         ...
+
+    async def stop_thread(self, *, user_id: str, thread_id: str) -> None:
+        """停止并移除 Thread 容器，用于文件快照与恢复的一致性屏障。"""
+        ...

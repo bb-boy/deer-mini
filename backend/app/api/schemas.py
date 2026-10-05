@@ -176,3 +176,44 @@ class WorkspaceFileResponse(BaseModel):
     name: str
     size: int
     modified_at: str
+
+
+class RestorePointResponse(BaseModel):
+    id: str
+    run_id: str | None
+    kind: str
+    created_at: str
+    message: str
+    available: bool
+    unavailable_reason: str | None
+
+
+class RestorePreviewResponse(BaseModel):
+    restore_point_id: str
+    revision: int
+    fingerprint: str
+    created: list[str]
+    modified: list[str]
+    deleted: list[str]
+    removed_messages: int
+    current_messages: int
+    target_messages: int
+
+
+class RestoreRequest(BaseModel):
+    operation_id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,100}$')
+    restore_point_id: str = Field(min_length=1,max_length=100)
+    revision: int = Field(ge=0)
+    fingerprint: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+class RestoreOperationResponse(BaseModel):
+    operation_id: str
+    thread_id: str
+    restore_point_id: str
+    recovery_point_id: str
+    status: str
+    error: str | None
+    cleaned: bool
+    created_at: str
+    updated_at: str

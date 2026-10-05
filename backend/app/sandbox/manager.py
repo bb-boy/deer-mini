@@ -43,6 +43,8 @@ from app.sandbox.base import CommandResult
 from app.sandbox.docker_runner import DockerCommandRunner, DockerRunnerConfig
 # SandboxEntry 是“容器借用登记卡”，记录归属、占用者和闲置状态。
 from app.sandbox.models import SandboxEntry
+from app.repositories.sandbox_safety_repository import SandboxSafetyRepository
+from app.runtime.async_io import run_sync
 
 
 # __name__ 是当前模块名；日志因此能标明消息来自 app.sandbox.manager。
@@ -75,24 +77,21 @@ async def cleanup_orphaned_thread_sandboxes() -> None:
     接收：没有显式参数；Docker 程序位置从环境变量读取。
     返回：None；调用方只等待检查和清理完成。
     例子：上一次开着 Bash，后端异常退出；这次关闭 Bash，也应处理旧容器。
-    找不到 Docker 程序就返回；连接或清理失败会记录警告，允许后端继续启动。
+    找不到 Docker 程序时由 Coordinator 检查持久化使用标记；连接或清理失败阻止启动。
     """
     # 优先使用配置的程序位置，没有配置时使用 PATH 中的 docker。
     docker_binary = os.getenv("DEER_MINI_DOCKER_BINARY", "docker")
     # which 返回找到的程序路径；返回 None 表示当前环境找不到这个程序。
     if shutil.which(docker_binary) is None:
-        # 找不到程序就结束本次检查，避免尝试启动一个不存在的命令。
+        # 从未使用容器的部署不依赖 Docker；有未确认停止记录时必须拒绝启动。
+        await run_sync(SandboxSafetyRepository().require_clear_without_docker)
         return
     # 这里只创建 Python 执行器对象，真正调用 Docker 是下一步。
     runner = DockerCommandRunner(DockerRunnerConfig(docker_binary=docker_binary))
     # 清理时可能连接不到 Docker 服务，所以把可能失败的操作放进 try。
-    try:
-        # 只处理带当前项目标记的容器，等待删除操作结束。
-        await runner.remove_owned_containers(default_sandbox_scope())
-    # Exception 捕获普通运行错误，例如 Docker 服务不可用。
-    except Exception:
-        # exc_info=True 会把异常调用栈也写入日志，方便知道失败发生在哪里。
-        logger.warning("启动时无法检查遗留的 Thread 容器", exc_info=True)
+    # 停止失败必须阻止启动，否则旧后台进程可能在恢复目录时继续写入。
+    await runner.remove_owned_containers(default_sandbox_scope())
+    await run_sync(SandboxSafetyRepository().mark_clear)
 
 
 class ThreadSandboxManager:
@@ -366,6 +365,16 @@ class ThreadSandboxManager:
             entry.container_id = None
         # 当前已经没有需要继续清理的容器，可以移除故障标记。
         entry.broken = False
+
+    async def stop_thread(self, *, user_id: str, thread_id: str) -> None:
+        """确认当前 Thread 的所有容器已停止；失败保留登记，禁止假装停止成功。"""
+        key = (user_id, thread_id)
+        async with self._lock(key):
+            for pool in (self._active, self._warm_pool):
+                entry = pool.get(key)
+                if entry is not None:
+                    await self._destroy(entry)
+                    pool.pop(key, None)
 
     async def reap_idle(self) -> list[str]:
         """检查空闲集合，删除闲置太久或需要清理的容器。

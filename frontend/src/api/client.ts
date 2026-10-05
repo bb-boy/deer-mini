@@ -1,4 +1,4 @@
-import type { Checkpoint, ModelsResponse, Run, Thread, WorkspaceFile } from "./types";
+import type { Checkpoint, ModelsResponse, RestoreInput, RestoreOperation, RestorePoint, RestorePreview, Run, Thread, WorkspaceFile } from "./types";
 
 
 export class ApiError extends Error {
@@ -178,4 +178,22 @@ export function workspaceFileDownloadUrl(
     .map((segment) => encodeURIComponent(segment))
     .join("/");
   return `/api/threads/${encodeURIComponent(threadId)}/files/${encodedPath}?${userQuery(userId)}`;
+}
+
+export function listRestorePoints(threadId: string, userId: string): Promise<RestorePoint[]> {
+  return request(`/api/threads/${encodeURIComponent(threadId)}/restore-points?${userQuery(userId)}`);
+}
+
+export function previewRestorePoint(threadId: string, pointId: string, userId: string): Promise<RestorePreview> {
+  return request(`/api/threads/${encodeURIComponent(threadId)}/restore-points/${encodeURIComponent(pointId)}/preview?${userQuery(userId)}`, { method: "POST" });
+}
+
+export function restoreThread(threadId: string, userId: string, input: RestoreInput): Promise<RestoreOperation> {
+  return request(`/api/threads/${encodeURIComponent(threadId)}/restore?${userQuery(userId)}`, {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
+
+export function getRestoreOperation(threadId: string, operationId: string, userId: string): Promise<RestoreOperation> {
+  return request(`/api/threads/${encodeURIComponent(threadId)}/restore-operations/${encodeURIComponent(operationId)}?${userQuery(userId)}`);
 }

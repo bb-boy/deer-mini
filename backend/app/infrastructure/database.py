@@ -111,3 +111,58 @@ def initialize_database() -> None:
             CREATE INDEX IF NOT EXISTS idx_run_events_thread_id ON run_events(thread_id);
             """
         )
+
+        # 旧数据库中的状态默认为 execution；迁移只补缺失指针，不覆盖已有恢复。
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(checkpoints)")}
+        if "kind" not in columns:
+            conn.execute("ALTER TABLE checkpoints ADD COLUMN kind TEXT NOT NULL DEFAULT 'execution'")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS runtime_flags (
+                name TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS thread_heads (
+                thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+                checkpoint_id INTEGER NOT NULL REFERENCES checkpoints(id),
+                revision INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS file_snapshots (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                manifest_json TEXT NOT NULL,
+                total_bytes INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS file_restore_points (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
+                state_checkpoint_id INTEGER NOT NULL REFERENCES checkpoints(id),
+                file_snapshot_id TEXT NOT NULL REFERENCES file_snapshots(id),
+                kind TEXT NOT NULL CHECK(kind IN ('turn_start','recovery')),
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_file_points_thread ON file_restore_points(thread_id);
+            CREATE TABLE IF NOT EXISTS file_restore_operations (
+                operation_id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                restore_point_id TEXT NOT NULL,
+                recovery_point_id TEXT NOT NULL,
+                expected_revision INTEGER NOT NULL,
+                fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN
+                    ('prepared','applying','committed','rolled_back','needs_recovery')),
+                error TEXT,
+                cleaned INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_file_operations_thread ON file_restore_operations(thread_id);
+        """)
+        conn.execute("""
+            INSERT OR IGNORE INTO thread_heads(thread_id, checkpoint_id, revision)
+            SELECT c.thread_id,c.id,1 FROM checkpoints c
+            WHERE c.id=(SELECT c2.id FROM checkpoints c2 WHERE c2.thread_id=c.thread_id
+                        ORDER BY c2.created_at DESC,c2.id DESC LIMIT 1)
+        """)

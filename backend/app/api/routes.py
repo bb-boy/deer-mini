@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api.schemas import (
     CheckpointResponse,
+    RestorePointResponse, RestorePreviewResponse, RestoreRequest, RestoreOperationResponse,
     CreateRunRequest,
     CreateThreadRequest,
     ModelProfileResponse,
@@ -26,6 +27,11 @@ from app.repositories.events_repository import EventRepository
 from app.repositories.run_repository import RunRepository
 from app.repositories.thread_repository import ThreadRepository
 from app.runtime.stream_bridge import MemoryStreamBridge, StreamEvent
+from app.runtime.async_io import run_sync
+from app.runtime.errors import StatePersistenceError
+from app.services.thread_operations import ThreadOperations
+from app.services.file_checkpoint_service import FileCheckpointService
+from app.repositories.file_checkpoint_repository import FileCheckpointRepository
 from app.services.run_coordinator import RunCoordinator
 from app.services.thread_service import ThreadService
 from app.services.workspace_file_service import (
@@ -205,6 +211,8 @@ async def create_run(
             thinking_enabled=body.thinking_enabled,
             reasoning_effort=body.reasoning_effort,
         )
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -282,6 +290,7 @@ def list_run_checkpoints(
 )
 async def upload_workspace_file(
     thread_id: str,
+    request: Request,
     file: UploadFile = File(...),
     user_id: str = Query(min_length=1),
 ) -> WorkspaceFileResponse:
@@ -293,11 +302,15 @@ async def upload_workspace_file(
             yield chunk
 
     try:
-        stored_file = await WorkspaceFileService().save_upload(
-            thread.workspace_path,
-            file.filename or "",
-            chunks(),
-        )
+        _require_file_ready(thread)
+        with _file_operations(request).write(user_id, thread_id, "upload"):
+            if any(r.thread_id == thread_id and r.user_id == user_id for r in RunRepository().list_inflight()):
+                raise RuntimeError("对话正在执行，请等待结束后上传")
+            stored_file = await WorkspaceFileService().save_upload(
+                thread.workspace_path, file.filename or "", chunks(),
+            )
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except UploadTooLargeError as error:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
@@ -323,14 +336,22 @@ async def upload_workspace_file(
     "/threads/{thread_id}/files",
     response_model=list[WorkspaceFileResponse],
 )
-def list_workspace_files(
+async def list_workspace_files(
     thread_id: str,
+    request: Request,
     user_id: str = Query(min_length=1),
 ) -> list[WorkspaceFileResponse]:
     """列出当前 Thread 的上传资料、工作文件和生成结果。"""
     thread = _require_owned_thread(thread_id, user_id)
     try:
-        files = WorkspaceFileService().list_files(thread.workspace_path)
+        _require_file_ready(thread)
+        release = _file_operations(request).read(user_id, thread_id)
+        try:
+            files = await run_sync(WorkspaceFileService().list_files, thread.workspace_path)
+        finally:
+            release()
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except UnsafeWorkspacePathError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except FileNotFoundError as error:
@@ -342,30 +363,41 @@ def list_workspace_files(
 
 
 @router.get("/threads/{thread_id}/files/{relative_path:path}")
-def download_workspace_file(
+async def download_workspace_file(
     thread_id: str,
+    request: Request,
     relative_path: str,
     user_id: str = Query(min_length=1),
 ) -> FileResponse:
     """下载当前 Thread Workspace 中一个经过边界检查的文件。"""
     thread = _require_owned_thread(thread_id, user_id)
     try:
+        _require_file_ready(thread)
+        release = _file_operations(request).read(user_id, thread_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    try:
         target = WorkspaceFileService().resolve_download(
             thread.workspace_path,
             relative_path,
         )
     except UnsafeWorkspacePathError as error:
+        release()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(error),
         ) from error
     except FileNotFoundError as error:
+        release()
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="文件不存在",
         ) from error
 
-    return FileResponse(path=target, filename=target.name)
+    except BaseException:
+        release()
+        raise
+    return _LeasedFileResponse(path=target, filename=target.name, release=release)
 
 
 @router.get(
@@ -412,6 +444,82 @@ async def cancel_run(
         ) from error
 
     return RunResponse.model_validate(run)
+
+
+def _file_operations(request: Request) -> ThreadOperations:
+    operations = getattr(request.app.state, "thread_operations", None)
+    if operations is None:
+        coordinator = getattr(request.app.state, "run_coordinator", None)
+        operations = coordinator.operations if coordinator else ThreadOperations()
+        request.app.state.thread_operations = operations
+    return operations
+
+
+def _require_file_ready(thread) -> None:
+    if FileCheckpointRepository().operations(thread, pending_only=True):
+        raise RuntimeError("对话文件恢复尚待完成，请稍后重试")
+
+
+class _LeasedFileResponse(FileResponse):
+    """传输完成或断连后才释放读者，防止下载中途切换目录。"""
+    def __init__(self, *, release, **kwargs):
+        super().__init__(**kwargs)
+        self.release = release
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self.release()
+
+
+def _restore_http_error(error: Exception) -> HTTPException:
+    if isinstance(error, LookupError):
+        return HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, StatePersistenceError):
+        return HTTPException(status_code=503, detail=str(error))
+    if isinstance(error, RuntimeError):
+        return HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, OSError):
+        return HTTPException(status_code=507, detail="文件备份或恢复失败，请检查存储空间和文件状态")
+    return HTTPException(status_code=400, detail=str(error))
+
+
+@router.get("/threads/{thread_id}/restore-points", response_model=list[RestorePointResponse])
+async def list_restore_points(thread_id: str, user_id: str = Query(min_length=1)):
+    thread = _require_owned_thread(thread_id, user_id)
+    return await run_sync(FileCheckpointService().list_points, thread)
+
+
+@router.post("/threads/{thread_id}/restore-points/{point_id}/preview", response_model=RestorePreviewResponse)
+async def preview_restore_point(thread_id: str, point_id: str, request: Request,
+                                user_id: str = Query(min_length=1)):
+    _require_owned_thread(thread_id, user_id)
+    try:
+        return await _coordinator(request).preview_restore(user_id=user_id, thread_id=thread_id, point_id=point_id)
+    except (ValueError, LookupError, RuntimeError, OSError) as error:
+        raise _restore_http_error(error) from error
+
+
+@router.post("/threads/{thread_id}/restore", response_model=RestoreOperationResponse)
+async def restore_thread(thread_id: str, body: RestoreRequest, request: Request,
+                         user_id: str = Query(min_length=1)):
+    _require_owned_thread(thread_id, user_id)
+    try:
+        return await _coordinator(request).restore_thread(user_id=user_id, thread_id=thread_id,
+            operation_id=body.operation_id, point_id=body.restore_point_id,
+            revision=body.revision, fingerprint=body.fingerprint)
+    except (ValueError, LookupError, RuntimeError, OSError) as error:
+        raise _restore_http_error(error) from error
+
+
+@router.get("/threads/{thread_id}/restore-operations/{operation_id}", response_model=RestoreOperationResponse)
+async def get_restore_operation(thread_id: str, operation_id: str, user_id: str = Query(min_length=1)):
+    thread = _require_owned_thread(thread_id, user_id)
+    try:
+        return await run_sync(FileCheckpointService().operation, thread, operation_id)
+    except LookupError as error:
+        raise _restore_http_error(error) from error
 
 
 def _encode_sse(event: StreamEvent) -> str:

@@ -58,6 +58,28 @@ describe("useAgentRun", () => {
     payload: { text: "收到的回答", message_id: "answer" }, sequence: null, created_at: run.created_at,
   };
 
+  it("clearTransient closes the stream and ignores every late callback before starting afresh", async () => {
+    const onSnapshot = vi.fn(); const onSettled = vi.fn();
+    const close = vi.fn(); openRunStreamMock.mockReturnValue(close);
+    const { result } = renderHook(() => useAgentRun({ userId: "alice", thread, onSettled, onSnapshot }));
+    await act(async () => { await result.current.start(input); });
+    const old = openRunStreamMock.mock.calls[0][0];
+    act(() => { old.onEvent(delta); result.current.clearTransient(); });
+    expect(close).toHaveBeenCalled();
+    await act(async () => {
+      old.onEvent(delta);
+      old.onReset({ run_id: run.id, state: { messages: [{ id: "answer" }] } }, "stream_lost");
+      await old.onTerminal({ ...delta, event_type: "run.end", payload: { status: "success" } });
+    });
+    expect(result.current.liveMessages).toEqual([]);
+    expect(result.current.currentRun).toBeNull();
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onSettled).not.toHaveBeenCalled();
+    await act(async () => { await result.current.start(input); });
+    act(() => openRunStreamMock.mock.calls[1][0].onEvent(delta));
+    expect(result.current.liveMessages[0].content).toBe("收到的回答");
+  });
+
   it("shows retry notices outside messages and clears them on the next attempt", async () => {
     const { result } = renderHook(() => useAgentRun({ userId: "alice", thread, onSettled: vi.fn() }));
     await act(async () => { await result.current.start(input); });

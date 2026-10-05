@@ -133,3 +133,44 @@ export interface LiveToolEvent {
   arguments?: Record<string, unknown>;
   content?: string;
 }
+
+export interface RestorePoint {
+  id: string;
+  run_id: string | null;
+  kind: "turn_start" | "recovery";
+  created_at: string;
+  message: string;
+  available: boolean;
+  unavailable_reason: string | null;
+}
+
+export interface RestorePreview {
+  restore_point_id: string;
+  revision: number;
+  fingerprint: string;
+  created: string[];
+  modified: string[];
+  deleted: string[];
+  removed_messages: number;
+  target_messages: number;
+  current_messages: number;
+}
+
+export interface RestoreInput {
+  operation_id: string;
+  restore_point_id: string;
+  revision: number;
+  fingerprint: string;
+}
+
+export interface RestoreOperation {
+  operation_id: string;
+  thread_id: string;
+  restore_point_id: string;
+  recovery_point_id: string | null;
+  status: "prepared" | "applying" | "committed" | "rolled_back" | "needs_recovery";
+  error: string | null;
+  cleaned: boolean | number;
+  created_at: string;
+  updated_at: string;
+}

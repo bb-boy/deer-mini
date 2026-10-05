@@ -192,7 +192,8 @@ def test_timeout_kills_container_and_returns_timeout(tmp_path: Path, monkeypatch
     runner = DockerCommandRunner(
         make_config(
             docker_binary=str(fake_docker),
-            timeout_seconds=0.1,
+            # 为 Python CLI 冷启动留出时间；其 60 秒 sleep 仍必然超时。
+            timeout_seconds=1.0,
         )
     )
 

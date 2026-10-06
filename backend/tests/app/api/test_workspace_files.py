@@ -191,3 +191,40 @@ def test_upload_then_real_read_file(workspace_client):
     result = asyncio.run(ReadFileTool().execute(call, context))
     assert not result.is_error
     assert result.content == "真实附件内容"
+
+
+def test_storage_failure_returns_safe_http_detail(workspace_client, monkeypatch, caplog):
+    import errno
+    import os
+    client, workspace = workspace_client
+    def fail_sync(fd):
+        raise OSError(errno.ENOSPC, "SYNTHETIC_PRIVATE_UPLOAD_VALUE")
+    monkeypatch.setattr(os, "fsync", fail_sync)
+    response = client.post("/api/threads/files-thread/files", params={"user_id": "alice"},
+                           files={"file": ("note.txt", b"hello", "text/plain")})
+    assert response.status_code == 500
+    assert response.json() == {"detail": "文件保存未能确认，请稍后重试"}
+    assert "SYNTHETIC_PRIVATE_UPLOAD_VALUE" not in response.text + caplog.text
+    assert not list((workspace.parent / "uploads").glob(".upload-*.part"))
+
+
+@pytest.mark.parametrize('endpoint', ['files', 'files/uploads/note.txt'])
+def test_storage_readiness_failure_is_not_business_conflict(workspace_client, monkeypatch, endpoint):
+    import sqlite3
+    from app.repositories.file_checkpoint_repository import FileCheckpointRepository
+    from app.storage.errors import classify_sqlite_error
+    client, _ = workspace_client
+    def fail(*args, **kwargs):
+        raise classify_sqlite_error(sqlite3.OperationalError('database is locked'), operation='read', stage='execute')
+    monkeypatch.setattr(FileCheckpointRepository, 'operations', fail)
+    response = client.get(f'/api/threads/files-thread/{endpoint}', params={'user_id':'alice'})
+    assert response.status_code == 500
+    assert response.json() == {'detail':'存储操作未能确认，请稍后重试'}
+
+
+def test_restore_storage_failure_is_not_business_conflict():
+    import sqlite3
+    from app.api.routes import _restore_http_error
+    from app.storage.errors import classify_sqlite_error
+    error = classify_sqlite_error(sqlite3.OperationalError('database is locked'), operation='write', stage='execute')
+    assert _restore_http_error(error).status_code == 500

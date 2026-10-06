@@ -8,6 +8,10 @@ import sqlite3
 import os
 from pathlib import Path
 
+from app.storage.errors import classify_os_error, classify_sqlite_error
+from app.storage.sqlite import StorageConnection
+from app.memory.task_schema import SCHEMA as MEMORY_TASK_SCHEMA
+
 DATABASE_PATH = Path(__file__).resolve().parents[2] / "data" / "deer_mini.db" #resolve()返回绝对路径，parents[2]返回到第三个父目录。__file__是当前文件的路径，PATH把她变为一个PATH对象方便操作，
 
 
@@ -29,10 +33,20 @@ def connect() ->sqlite3.Connection:
     """
 
     database_path = resolve_database_path()
-    database_path.parent.mkdir(parents=True, exist_ok=True)  # 确保 data 文件夹存在
-    conn = sqlite3.connect(database_path)
-    conn.row_factory = sqlite3.Row  # 设置行工厂，默认是元组返回，设置行工厂就会可以通过row["name"]来访问
-    conn.execute("PRAGMA foreign_keys = ON;") #打开外键约束检查
+    try:
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise classify_os_error(error, operation="open", stage="open") from error
+    try:
+        conn = sqlite3.connect(database_path, factory=StorageConnection)
+    except sqlite3.Error as error:
+        raise classify_sqlite_error(error, operation="open", stage="open") from error
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON;")
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
@@ -166,3 +180,4 @@ def initialize_database() -> None:
             WHERE c.id=(SELECT c2.id FROM checkpoints c2 WHERE c2.thread_id=c.thread_id
                         ORDER BY c2.created_at DESC,c2.id DESC LIMIT 1)
         """)
+        conn.executescript(MEMORY_TASK_SCHEMA)

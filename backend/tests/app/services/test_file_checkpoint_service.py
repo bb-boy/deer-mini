@@ -297,3 +297,17 @@ def test_rolled_back_recovery_cleanup_db_failure_keeps_terminal_state(env,monkey
     again=type(service)()
     assert again.recover_pending()==[]
     assert again.operation(thread,'terminal-retry')['cleaned']
+
+
+def test_capture_wraps_classified_database_failure(env, monkeypatch):
+    import sqlite3
+    from app.storage.errors import classify_sqlite_error
+    from app.runtime.errors import StatePersistenceError
+    service, thread, run, state = env
+    error = classify_sqlite_error(sqlite3.OperationalError('database is locked'), operation='write', stage='execute')
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(service, '_capture', fail)
+    with pytest.raises(StatePersistenceError) as caught:
+        service.capture_turn(thread, run, state, 'test')
+    assert caught.value.__cause__ is error

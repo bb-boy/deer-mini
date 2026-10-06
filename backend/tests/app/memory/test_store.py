@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from app.storage.errors import StorageError
+
 from app.memory.store import (
     MAX_CONTENT_BYTES,
     MAX_DESCRIPTION_CHARS,
@@ -257,8 +259,10 @@ def test_failed_index_replace_reports_failure_and_body_repairs_on_next_read(stor
         return original(source, destination, **kwargs)
 
     monkeypatch.setattr(os, "replace", fail_index)
-    with pytest.raises(OSError, match="simulated disk error"):
+    with pytest.raises(StorageError, match="io at replace") as error:
         save(store)
+    assert isinstance(error.value.__cause__, OSError)
+    assert error.value.commit_state == "not_committed"
     directory = tmp_path / "users/alice/memories"
     assert len(list(directory.glob("user_*.md"))) == 1
     assert not list(directory.glob("*.tmp"))
@@ -277,8 +281,10 @@ def test_failed_body_replace_keeps_original_record(store, monkeypatch):
         raise OSError("simulated disk error")
 
     monkeypatch.setattr(os, "replace", fail_replace)
-    with pytest.raises(OSError, match="simulated disk error"):
+    with pytest.raises(StorageError, match="io at replace") as error:
         save(store, memory_id=record.id, content="Changed")
+    assert isinstance(error.value.__cause__, OSError)
+    assert error.value.commit_state == "not_committed"
     assert store.read("alice", record.id) == record
 
 

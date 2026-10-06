@@ -34,6 +34,7 @@ from app.services.file_checkpoint_service import FileCheckpointService
 from app.repositories.file_checkpoint_repository import FileCheckpointRepository
 from app.services.run_coordinator import RunCoordinator
 from app.services.thread_service import ThreadService
+from app.storage.errors import StorageError
 from app.services.workspace_file_service import (
     UnsafeWorkspacePathError,
     UploadTooLargeError,
@@ -147,6 +148,8 @@ def update_thread(
     _require_owned_thread(thread_id, user_id)
     try:
         thread = ThreadService().rename_thread(thread_id, user_id, body.title)
+    except StorageError as error:
+        raise HTTPException(status_code=500, detail="存储操作未能确认，请稍后重试") from error
     except RuntimeError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -173,6 +176,8 @@ async def delete_thread(
     _require_owned_thread(thread_id, user_id)
     try:
         await _coordinator(request).delete_thread(thread_id=thread_id, user_id=user_id)
+    except StorageError as error:
+        raise HTTPException(status_code=500, detail="存储操作未能确认，请稍后重试") from error
     except RuntimeError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -211,6 +216,8 @@ async def create_run(
             thinking_enabled=body.thinking_enabled,
             reasoning_effort=body.reasoning_effort,
         )
+    except StorageError as error:
+        raise HTTPException(status_code=500, detail="存储操作未能确认，请稍后重试") from error
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
@@ -309,6 +316,12 @@ async def upload_workspace_file(
             stored_file = await WorkspaceFileService().save_upload(
                 thread.workspace_path, file.filename or "", chunks(),
             )
+    except StorageError as error:
+        logger.warning("upload_storage_failed thread=%s storage=%s", thread_id, error.safe_fields())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="文件保存未能确认，请稍后重试",
+        ) from error
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except UploadTooLargeError as error:
@@ -350,6 +363,8 @@ async def list_workspace_files(
             files = await run_sync(WorkspaceFileService().list_files, thread.workspace_path)
         finally:
             release()
+    except StorageError as error:
+        raise HTTPException(status_code=500, detail="存储操作未能确认，请稍后重试") from error
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except UnsafeWorkspacePathError as error:
@@ -374,6 +389,8 @@ async def download_workspace_file(
     try:
         _require_file_ready(thread)
         release = _file_operations(request).read(user_id, thread_id)
+    except StorageError as error:
+        raise HTTPException(status_code=500, detail="存储操作未能确认，请稍后重试") from error
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     try:
@@ -437,6 +454,8 @@ async def cancel_run(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(error),
         ) from error
+    except StorageError as error:
+        raise HTTPException(status_code=500, detail="存储操作未能确认，请稍后重试") from error
     except RuntimeError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -478,6 +497,8 @@ def _restore_http_error(error: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(error))
     if isinstance(error, StatePersistenceError):
         return HTTPException(status_code=503, detail=str(error))
+    if isinstance(error, StorageError):
+        return HTTPException(status_code=500, detail="存储操作未能确认，请稍后重试")
     if isinstance(error, RuntimeError):
         return HTTPException(status_code=409, detail=str(error))
     if isinstance(error, OSError):

@@ -5,6 +5,7 @@ import logging
 import math
 from collections.abc import Sequence
 
+from app.runtime.errors import log_runtime_exception
 from app.agents.middleware import AgentMiddleware, MiddlewareManager
 from app.agents.middleware_stack import build_runtime_middlewares
 from app.agents.tool_calls import execute_tool_calls, repair_interrupted_tool_history
@@ -119,7 +120,7 @@ class LeadAgent:
                 try:
                     await self._middleware.after_agent(state, context, error)
                 except (Exception, asyncio.CancelledError):
-                    logger.exception("Agent 失败后的 Middleware 清理也发生异常")
+                    log_runtime_exception(logger, "Agent 失败后的 Middleware 清理也发生异常")
                 raise
             else:
                 await self._middleware.after_agent(final_state, context, None)
@@ -134,7 +135,7 @@ class LeadAgent:
             except (Exception, asyncio.CancelledError):
                 if original_error is None:
                     raise
-                logger.exception("模型连接清理失败，保留 Agent 的原始异常")
+                log_runtime_exception(logger, "模型连接清理失败，保留 Agent 的原始异常")
 
     async def _run_loop(
         self,

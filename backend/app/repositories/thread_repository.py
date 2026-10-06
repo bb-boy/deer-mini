@@ -153,6 +153,10 @@ class ThreadRepository:
         if thread is None:
             return None
         with connect() as conn:
+            # 同一写事务协调来源删除和记忆登记，历史不依赖 Thread 外键。
+            from app.repositories.memory_task_repository import cancel_source_tasks
+            conn.execute("BEGIN IMMEDIATE")
+            cancel_source_tasks(conn, user_id, thread_id, utc_now())
             conn.execute(
                 "DELETE FROM threads WHERE id = ? AND user_id = ?",
                 (thread_id, user_id),

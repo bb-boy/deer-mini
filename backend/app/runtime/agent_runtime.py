@@ -5,6 +5,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 
+from app.runtime.errors import log_runtime_exception
 from app.domain.checkpoints import Checkpoint
 from app.domain.messages import Message
 from app.domain.runs import Run
@@ -225,7 +226,7 @@ class AgentRuntime:
                     release_sandbox,
                 )))
             except (Exception, asyncio.CancelledError):
-                logger.exception("Run %s 收尾发生异常，保留最初的执行异常", run_id)
+                log_runtime_exception(logger, "Run %s 收尾发生异常，保留最初的执行异常", run_id)
             raise
         finally:
             async def cleanup() -> None:
@@ -244,7 +245,7 @@ class AgentRuntime:
                 if original_error is None:
                     raise
             except Exception:
-                logger.exception("Run %s 清理失败，Stream 已尝试结束", run_id)
+                log_runtime_exception(logger, "Run %s 清理失败，Stream 已尝试结束", run_id)
                 if original_error is None:
                     raise
 
@@ -258,13 +259,13 @@ class AgentRuntime:
         try:
             await release_sandbox()
         except Exception:
-            logger.exception("Run %s 的执行环境归还失败，将在最终清理时重试", run_id)
+            log_runtime_exception(logger, "Run %s 的执行环境归还失败，将在最终清理时重试", run_id)
         # 取消可能恰好发生在 success 提交期间；以已经提交的终态为准。
         current = None
         try:
             current = await run_sync(self._run_service.get_run, run_id, user_id)
         except Exception:
-            logger.exception("无法读取 Run %s 的状态，将继续尝试保存错误状态", run_id)
+            log_runtime_exception(logger, "无法读取 Run %s 的状态，将继续尝试保存错误状态", run_id)
         if current is not None and current.status in TERMINAL_EVENT_TYPES:
             await recorder.record_event(TERMINAL_EVENT_TYPES[current.status], {
                 "status": current.status, "status_confirmed": True,
@@ -276,7 +277,7 @@ class AgentRuntime:
             try:
                 await save_checkpoint(state)
             except Exception as checkpoint_error:
-                logger.exception("Run %s 的关键状态保存失败", run_id)
+                log_runtime_exception(logger, "Run %s 的关键状态保存失败", run_id)
                 status = "error"
                 details = {
                     **details, "error_type": type(checkpoint_error).__name__,
@@ -299,7 +300,7 @@ class AgentRuntime:
                     status, confirmed = current.status, True
                     details = {"message": current.error} if current.error else {}
         except Exception:
-            logger.exception("Run %s 的终态未能保存，不能声称数据库状态已确认", run_id)
+            log_runtime_exception(logger, "Run %s 的终态未能保存，不能声称数据库状态已确认", run_id)
 
         await recorder.record_event(
             TERMINAL_EVENT_TYPES[status] if confirmed else "run.error",

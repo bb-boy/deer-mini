@@ -21,6 +21,7 @@ from app.repositories.checkpoint_repository import CheckpointRepository
 from app.repositories.file_checkpoint_repository import FileCheckpointRepository
 from app.repositories.run_repository import RunRepository
 from app.runtime.errors import StatePersistenceError
+from app.storage.errors import StorageError
 
 AREAS = ('uploads','workspace','outputs')
 
@@ -117,7 +118,7 @@ class FileCheckpointService:
                                 deepcopy(state),kind='turn_start')
         try:
             return self._capture(thread,checkpoint,message,kind='turn_start')
-        except sqlite3.Error as error:
+        except (sqlite3.Error, StorageError) as error:
             raise StatePersistenceError('本轮恢复点未能保存') from error
 
     def list_points(self, thread: Thread) -> list[dict]:

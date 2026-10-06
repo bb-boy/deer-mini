@@ -11,6 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.runtime.errors import log_runtime_exception
 from app.domain.common import new_id
 
 
@@ -183,8 +184,7 @@ class MemoryStreamBridge:
         if self._cleanup_tasks.get(run_id) is task:
             self._cleanup_tasks.pop(run_id, None)
         if not task.cancelled() and (error := task.exception()) is not None:
-            logger.error("清理 Run Stream 失败：%s", run_id,
-                         exc_info=(type(error), error, error.__traceback__))
+            log_runtime_exception(logger, "清理 Run Stream 失败：%s", run_id, error=error)
 
     @staticmethod
     def _load_retention_seconds() -> float:

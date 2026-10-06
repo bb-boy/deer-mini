@@ -7,6 +7,7 @@ import os
 from typing import cast
 from collections.abc import Callable
 
+from app.runtime.errors import log_runtime_exception
 from app.agents.prompts.builder import apply_prompt_template
 from app.agents.lead_agent import LeadAgent
 from app.agents.todo_middleware import TodoMiddleware
@@ -311,7 +312,7 @@ class RunCoordinator:
             except Exception:
                 # Runtime 已负责把真正的执行错误保存为 error；
                 # 这里重新读取状态并返回，不用取消错误覆盖原错误。
-                logger.exception("取消 Run 时，后台任务以异常结束")
+                log_runtime_exception(logger, "取消 Run 时，后台任务以异常结束")
 
         refreshed = self._run_service.get_run(run_id, user_id)
         if refreshed is not None and refreshed.status in {"pending", "running"}:
@@ -363,7 +364,7 @@ class RunCoordinator:
                     ORPHAN_RECOVERY_ERROR,
                 )
             except Exception:
-                logger.exception(
+                log_runtime_exception(logger,
                     "无法恢复孤儿 Run %s，继续处理其他记录",
                     candidate.id,
                 )
@@ -389,7 +390,7 @@ class RunCoordinator:
             except Exception:
                 # Run/Thread 已经恢复为终态；单条事件写入失败不能阻止
                 # 其余孤儿 Run 被恢复。
-                logger.exception(
+                log_runtime_exception(logger,
                     "无法为孤儿 Run %s 记录恢复事件",
                     candidate.id,
                 )
@@ -414,6 +415,7 @@ class RunCoordinator:
         return recovered_runs
 
     async def start(self) -> None:
+        await self._memory_service.start()
         await cleanup_pending_thread_deletions()
         if self._sandbox_manager is not None:
             await run_sync(SandboxSafetyRepository().mark_active)
@@ -485,10 +487,7 @@ class RunCoordinator:
             logger.info("Agent Run 已自动超时：%s", run_id)
             return
         if error is not None:
-            logger.error(
-                "Agent 后台任务执行失败",
-                exc_info=(type(error), error, error.__traceback__),
-            )
+            log_runtime_exception(logger, "Agent 后台任务执行失败", error=error)
             return
         if memory_factory is not None:
             # Runtime 成功返回时，最终 checkpoint、Run 终态和收尾均已确认。

@@ -10,7 +10,7 @@ from app.domain.threads import ThreadState
 from app.domain.todos import todo_result_content
 from app.runtime.async_io import finish_inflight
 from app.runtime.context import RuntimeContext
-from app.runtime.errors import StatePersistenceError
+from app.runtime.errors import StatePersistenceError, log_runtime_exception
 from app.tools.executor import ToolExecutor
 
 
@@ -169,7 +169,7 @@ async def execute_tool_calls(
                 try:
                     await publish_end(index, interrupted=True)
                 except Exception:
-                    logger.warning("工具收尾通知失败，保留已保存的结果", exc_info=True)
+                    log_runtime_exception(logger, "工具收尾通知失败，保留已保存的结果", level=logging.WARNING)
 
     try:
         for is_task_batch, items in groupby(range(len(calls)), key=lambda i: calls[i].name == "task"):
@@ -200,9 +200,9 @@ async def execute_tool_calls(
             if not isinstance(original, StatePersistenceError):
                 persistence_error.execution_error = original
                 raise persistence_error from original
-            logger.exception("工具中断后的状态收尾失败，保留最初的持久化异常")
+            log_runtime_exception(logger, "工具中断后的状态收尾失败，保留最初的持久化异常")
         except (Exception, asyncio.CancelledError):
-            logger.exception("工具中断后的状态收尾失败，保留最初的执行异常")
+            log_runtime_exception(logger, "工具中断后的状态收尾失败，保留最初的执行异常")
         if original is not error:
             raise original
         raise

@@ -11,6 +11,7 @@ from app.domain.threads import ThreadState
 from app.memory.model_calls import call_memory_model, parse_json_object
 from app.memory.prompts import EXTRACTION_PROMPT
 from app.memory.store import MemoryStore, MAX_CONTENT_BYTES
+from app.memory.operations import PreparedMemoryOperation, record_version
 from app.model.base import ChatModel
 from app.runtime.async_io import run_sync
 
@@ -43,19 +44,20 @@ class MemoryExtractor:
                  *, timeout: float = 30.0) -> None:
         self.store, self.model_factory, self.timeout = store, model_factory, timeout
 
-    async def extract(self, state: ThreadState, run_id: str) -> None:
-        """从最新用户消息抽取长期信息，验证来源、类型、目标和内容再写入。
+    async def prepare(self, state: ThreadState, run_id: str) -> list[PreparedMemoryOperation]:
+        """从最新用户消息抽取长期信息，校验全部建议并返回可登记保存项。
 
         普通错误留给后台任务管理器记录，取消和文件提交错误继续传播。
-        同一用户的串行化由 MemoryService 负责；模型不接触真实文件路径。
+        调用前捕获版本，准备时拒绝过期更新；此阶段不修复索引或写正文。
         """
         users = [message for message in state.messages if message.role == "user"]
         if not users:
-            return
+            return []
         current_user = users[-1].content[-16_000:]
         if not current_user.strip():
-            return
-        records = await run_sync(self.store.catalog, state.user_id)
+            return []
+        records = await run_sync(self.store.snapshot, state.user_id)
+        snapshots = {record.id: record for record in records}
         existing, used = [], 2
         for record in records:
             item = {"memory_id": record.id, "type": record.type, "name": record.name,
@@ -68,7 +70,7 @@ class MemoryExtractor:
         # 仅有限的既有正文用于避免重复与理解更新，不把整库塞进提示词。
         body_used = 0
         for item in existing[:5]:
-            record = await run_sync(self.store.read, state.user_id, item["memory_id"])
+            record = snapshots[item["memory_id"]]
             if record is not None and body_used + len(record.content) <= 24_000:
                 item["content"] = record.content
                 body_used += len(record.content)
@@ -111,7 +113,16 @@ class MemoryExtractor:
                 if target is None or target["type"] != change.type or change.memory_id in updated:
                     raise ValueError("更新记忆目标无效或重复")
                 updated.add(change.memory_id)
-        for change in changes:
-            await run_sync(self.store.upsert, state.user_id, kind=change.type, name=change.name,
-                description=change.description, content=change.content,
-                source_thread_id=state.thread_id, source_run_id=run_id, memory_id=change.memory_id)
+        return await run_sync(
+            self.store.prepare, state.user_id,
+            [change.model_dump(exclude={"evidence"}) for change in changes],
+            source_thread_id=state.thread_id, source_run_id=run_id,
+            expected_versions={item["memory_id"]: record_version(snapshots[item["memory_id"]])
+                               for item in existing},
+        )
+
+    async def extract(self, state: ThreadState, run_id: str) -> None:
+        """保留直接抽取保存接口；后台持久恢复使用 prepare 后登记任务。"""
+        operations = await self.prepare(state, run_id)
+        for operation in operations:
+            await run_sync(self.store.apply_operation, state.user_id, operation)

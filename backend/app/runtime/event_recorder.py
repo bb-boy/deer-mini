@@ -7,6 +7,7 @@ import math
 from collections import deque
 from copy import deepcopy
 
+from app.runtime.errors import log_runtime_exception
 from app.domain.events import RunEvent, RunEventType
 from app.repositories.events_repository import EventRepository
 from app.runtime.stream_bridge import MemoryStreamBridge
@@ -96,8 +97,7 @@ class EventRecorder:
     def _observe_writer(self, task: asyncio.Task[None]) -> None:
         _writers.discard(task)
         if not task.cancelled() and (error := task.exception()) is not None:
-            logger.error("Run %s 日志工作任务异常", self._run_id,
-                         exc_info=(type(error), error, error.__traceback__))
+            log_runtime_exception(logger, "Run %s 日志工作任务异常", self._run_id, error=error)
 
     async def _write_loop(self) -> None:
         while not self._abandon:
@@ -128,8 +128,8 @@ class EventRecorder:
                 await asyncio.to_thread(self._event_repository.append_batch, events, self._user_id)
                 return
             except Exception:
-                logger.warning("Run %s 的 %d 条辅助日志写入失败（第 %d 次）",
-                               self._run_id, len(events), attempt + 1, exc_info=True)
+                log_runtime_exception(logger, "Run %s 的 %d 条辅助日志写入失败（第 %d 次）",
+                                      self._run_id, len(events), attempt + 1, level=logging.WARNING)
                 if attempt + 1 < self._max_attempts and not self._abandon:
                     try:
                         await asyncio.wait_for(self._wake.wait(), self._retry_delay * (2 ** attempt))

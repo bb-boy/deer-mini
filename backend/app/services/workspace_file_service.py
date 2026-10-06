@@ -6,9 +6,10 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 import stat
-import tempfile
 
 from app.filesystem.thread_paths import ThreadPaths
+from app.storage.errors import UnsafeStoragePathError, classify_os_error
+from app.storage.file_io import AtomicWriter, child_directory_fd, directory_fd
 
 
 DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -60,38 +61,32 @@ class WorkspaceFileService:
         """输入当前 Thread 的 workspace 和上传数据；文件落入旁边的 uploads。"""
         paths = self._thread_paths(workspace_path)
         workspace = paths.uploads_path
-        workspace.mkdir(exist_ok=True)
         safe_name = self._validate_upload_filename(filename)
         destination = workspace / safe_name
         self._validate_upload_destination(destination)
 
-        file_descriptor, staging_value = tempfile.mkstemp(
-            prefix=STAGING_PREFIX,
-            suffix=STAGING_SUFFIX,
-            dir=workspace,
-        )
-        staging_path = Path(staging_value)
         total_bytes = 0
-
         try:
-            with os.fdopen(file_descriptor, "wb") as staging_file:
-                async for chunk in chunks:
-                    if not isinstance(chunk, bytes):
-                        raise TypeError("上传数据块必须是 bytes")
-                    total_bytes += len(chunk)
-                    if total_bytes > self._max_upload_bytes:
-                        raise UploadTooLargeError(self._max_upload_bytes)
-                    staging_file.write(chunk)
-                staging_file.flush()
-                os.fsync(staging_file.fileno())
+            with directory_fd(paths.thread_dir) as parent, child_directory_fd(parent, "uploads", create=True) as fd:
+                with AtomicWriter(fd, safe_name, prefix=STAGING_PREFIX, suffix=STAGING_SUFFIX) as writer:
+                    async for chunk in chunks:
+                        if not isinstance(chunk, bytes):
+                            raise TypeError("上传数据块必须是 bytes")
+                        total_bytes += len(chunk)
+                        if total_bytes > self._max_upload_bytes:
+                            raise UploadTooLargeError(self._max_upload_bytes)
+                        writer.write(chunk)
+                    writer.commit()
+                    assert writer.descriptor is not None
+                    try:
+                        stored_stat = os.fstat(writer.descriptor)
+                    except OSError as error:
+                        raise classify_os_error(error, operation="write", stage="metadata",
+                                                commit_state="committed") from error
+        except UnsafeStoragePathError as error:
+            raise UnsafeWorkspacePathError("上传目标不是安全的普通文件") from error
 
-            # staging 和目标位于同一个目录，os.replace 是一次原子替换。
-            os.replace(staging_path, destination)
-        except BaseException:
-            staging_path.unlink(missing_ok=True)
-            raise
-
-        stored = self._to_workspace_file(workspace, destination)
+        stored = self._to_workspace_file(workspace, destination, stored_stat)
         return replace(stored, relative_path=f"uploads/{stored.relative_path}")
 
     def list_files(self, workspace_path: str) -> list[WorkspaceFile]:
@@ -127,7 +122,7 @@ class WorkspaceFileService:
                 continue
             if stat.S_ISLNK(path_stat.st_mode):
                 continue
-            if not stat.S_ISREG(path_stat.st_mode):
+            if not stat.S_ISREG(path_stat.st_mode) or path_stat.st_nlink != 1:
                 continue
             files.append(self._to_workspace_file(workspace, path, path_stat))
 
@@ -151,8 +146,11 @@ class WorkspaceFileService:
                 "只能下载当前 Workspace 中的文件"
             ) from error
 
-        if not target.is_file():
+        target_stat = target.lstat()
+        if not stat.S_ISREG(target_stat.st_mode):
             raise FileNotFoundError(relative_path)
+        if target_stat.st_nlink != 1:
+            raise UnsafeWorkspacePathError("下载目标不能是硬链接")
         return target
 
     @staticmethod
@@ -194,7 +192,9 @@ class WorkspaceFileService:
             destination_stat = destination.lstat()
         except FileNotFoundError:
             return
-        if not stat.S_ISREG(destination_stat.st_mode):
+        except OSError as error:
+            raise classify_os_error(error, operation="write", stage="open") from error
+        if not stat.S_ISREG(destination_stat.st_mode) or destination_stat.st_nlink != 1:
             raise UnsafeWorkspacePathError("上传目标不是普通文件")
 
     @staticmethod

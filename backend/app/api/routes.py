@@ -28,6 +28,7 @@ from app.repositories.thread_repository import ThreadRepository
 from app.runtime.stream_bridge import MemoryStreamBridge, StreamEvent
 from app.services.run_coordinator import RunCoordinator
 from app.services.thread_service import ThreadService
+from app.storage.errors import StorageError
 from app.services.workspace_file_service import (
     UnsafeWorkspacePathError,
     UploadTooLargeError,
@@ -312,6 +313,12 @@ async def upload_workspace_file(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(error),
+        ) from error
+    except StorageError as error:
+        logger.warning("upload_storage_failed thread=%s storage=%s", thread_id, error.safe_fields())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="文件保存未能确认，请稍后重试",
         ) from error
     finally:
         await file.close()

@@ -1,10 +1,13 @@
 """当前 Thread 内工具结果的完整保存和字符分页读取。"""
 
 import os
+from contextlib import ExitStack
 from pathlib import Path
 from uuid import uuid4
 
 from app.filesystem.thread_paths import ThreadPaths, VIRTUAL_WORKSPACE
+from app.storage.errors import StorageError, classify_os_error
+from app.storage.file_io import atomic_write, child_directory_fd, directory_fd, open_regular_file
 
 
 RESULT_DIRECTORY = ".tool-results"
@@ -25,39 +28,35 @@ def resolve_result_path(workspace_path: str, virtual_path: str) -> Path:
 
 def save_text(workspace_path: str, virtual_path: str, text: str) -> None:
     target = resolve_result_path(workspace_path, virtual_path)
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # 创建目录后重新检查，避免已有符号链接被作为结果目录使用。
-    target = resolve_result_path(workspace_path, virtual_path)
-    temporary = target.with_name("." + uuid4().hex + ".tmp")
-    try:
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as file:
-            file.write(text)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary, target)
-        directory = os.open(target.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        temporary.unlink(missing_ok=True)
+    workspace = ThreadPaths(Path(workspace_path).parent).workspace_path
+    with ExitStack() as directories:
+        fd = directories.enter_context(directory_fd(workspace))
+        for part in target.parent.relative_to(workspace).parts:
+            fd = directories.enter_context(child_directory_fd(fd, part, create=True))
+        atomic_write(fd, target.name, text.encode("utf-8"))
 
 
 def read_chars(workspace_path: str, virtual_path: str, offset: int, limit: int) -> str:
+    if offset < 0 or not 0 <= limit <= 50_000:
+        raise ValueError("工具结果分页范围不合法")
     target = resolve_result_path(workspace_path, virtual_path)
-    if not target.is_file():
-        raise FileNotFoundError("工具结果文件不存在或不是普通文件")
-    with target.open("r", encoding="utf-8", newline="") as file:
-        # UTF-8 的字符偏移不能直接用于字节 seek；分块跳过，保持内存有界。
-        remaining = offset
-        while remaining:
-            chunk = file.read(min(8192, remaining))
-            if not chunk:
-                return ""
-            remaining -= len(chunk)
-        return file.read(limit)
+    try:
+        with directory_fd(target.parent) as directory, open_regular_file(directory, target.name) as fd:
+            with os.fdopen(fd, "r", encoding="utf-8", newline="", closefd=False) as file:
+                # UTF-8 的字符偏移不能直接用于字节 seek；分块跳过，保持内存有界。
+                remaining = offset
+                while remaining:
+                    chunk = file.read(min(8192, remaining))
+                    if not chunk:
+                        return ""
+                    remaining -= len(chunk)
+                return file.read(limit)
+    except StorageError as error:
+        if error.category == "not_found":
+            raise FileNotFoundError("工具结果文件不存在") from error
+        raise
+    except OSError as error:
+        raise classify_os_error(error, operation="read", stage="read") from error
 
 
 def preview_header(virtual_path: str, total_chars: int, preview_chars: int) -> str:

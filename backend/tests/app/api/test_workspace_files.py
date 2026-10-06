@@ -191,3 +191,18 @@ def test_upload_then_real_read_file(workspace_client):
     result = asyncio.run(ReadFileTool().execute(call, context))
     assert not result.is_error
     assert result.content == "真实附件内容"
+
+
+def test_storage_failure_returns_safe_http_detail(workspace_client, monkeypatch, caplog):
+    import errno
+    import os
+    client, workspace = workspace_client
+    def fail_sync(fd):
+        raise OSError(errno.ENOSPC, "SYNTHETIC_PRIVATE_UPLOAD_VALUE")
+    monkeypatch.setattr(os, "fsync", fail_sync)
+    response = client.post("/api/threads/files-thread/files", params={"user_id": "alice"},
+                           files={"file": ("note.txt", b"hello", "text/plain")})
+    assert response.status_code == 500
+    assert response.json() == {"detail": "文件保存未能确认，请稍后重试"}
+    assert "SYNTHETIC_PRIVATE_UPLOAD_VALUE" not in response.text + caplog.text
+    assert not list((workspace.parent / "uploads").glob(".upload-*.part"))

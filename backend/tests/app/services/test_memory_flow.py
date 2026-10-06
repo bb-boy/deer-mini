@@ -87,6 +87,9 @@ def test_success_extracts_after_persist_and_new_thread_recalls(monkeypatch, memo
             assert await service.flush(timeout=3)
             memories = store.list("alice")
             assert len(memories) == 1 and memories[0].type == "feedback"
+            from app.repositories.memory_task_repository import MemoryTaskRepository
+            saved_tasks = MemoryTaskRepository().list_tasks("alice")
+            assert len(saved_tasks) == 1 and saved_tasks[0]["status"] == "success"
             assert "memory_extraction" not in events[0][0].content
             second = ThreadService().create_thread("alice", "新对话")
             next_run = await start(coordinator, second, "帮我解释一个设计")

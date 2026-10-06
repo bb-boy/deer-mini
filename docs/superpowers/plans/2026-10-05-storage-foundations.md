@@ -54,3 +54,7 @@
 - 全量回归：742 passed, 10 skipped, 1 existing LangSmith deprecation warning。命令：`.venv/bin/python -m pytest tests/app --ignore=tests/app/model/test_factory.py -q --tb=short`。
 - `git diff --check` 与新增文件空白检查通过；没有前端行为或 SSE/API 成功响应类型修改。
 - 远端线上主工作区仍为 `main@d673fe0`，工作区干净；未访问线上数据库或用户目录进行测试，未部署、未合并。实现保留在本地和远端 `storage-foundations` 开发工作树的未提交修改中。
+
+## 2026-10-06 合并与真实验收更新
+
+用户后续授权“合并后做真实测试”。上述未提交、未合并及未执行真实模型测试为当时状态，现已完成：远端 main 合入 d5fdab8，独立审查及复审无未解决问题；集成回归853通过/13跳过，最终API与checkpoint专项70通过；真实模型12次调用覆盖抽取、跨对话召回、同ID更新和用户隔离，独立进程保存恢复0次模型调用。详细证据与边界见 [合并验收记录](../../2026-10-06-storage-real-acceptance.md)。未部署或重启生产服务。

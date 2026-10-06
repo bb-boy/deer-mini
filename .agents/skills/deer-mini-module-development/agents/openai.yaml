@@ -1,0 +1,4 @@
+interface:
+  display_name: "新增模块开发"
+  short_description: "通过 GrillMe 确认新增模块文档，在开发收尾时完成独立审查"
+  default_prompt: "使用 $deer-mini-module-development，通过 GrillMe 确认需求文档后按文档开发模块，自行安排实现和 subagent 协作，并在收尾时完成独立审查。"

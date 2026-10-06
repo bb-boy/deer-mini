@@ -13,3 +13,6 @@ backend/data/*.db
 
 # Deployed frontend build artifacts stay on disk.
 /frontend/releases/
+
+# Project-local development worktrees
+/.worktree/

@@ -25,7 +25,7 @@ def test_configured_tavily_registers_web_tools(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("TAVILY_API_KEY", "test-search-key")
     coordinator = RunCoordinator(MemoryStreamBridge(), bash_runner=None)
     registry = coordinator._build_tool_registry()
-    assert [tool.name for tool in registry.definitions()] == ["read_file", "read_tool_result", "web_search", "web_fetch", "task", "write_todos"]
+    assert [tool.name for tool in registry.definitions()] == ["read_file", "glob", "grep", "edit_file", "write_file", "read_tool_result", "web_search", "web_fetch", "task", "write_todos"]
     assert "test-search-key" not in repr(registry.definitions())
 
 
@@ -77,7 +77,7 @@ def test_bash_tool_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> No
         run_timeout_seconds=10,
     )
 
-    assert _tool_names(coordinator) == ["read_file", "read_tool_result", "task", "write_todos"]
+    assert _tool_names(coordinator) == ["read_file", "glob", "grep", "edit_file", "write_file", "read_tool_result", "task", "write_todos"]
 
 
 def test_injected_runner_registers_bash_tool() -> None:
@@ -87,7 +87,7 @@ def test_injected_runner_registers_bash_tool() -> None:
         bash_runner=RecordingRunner(),
     )
 
-    assert _tool_names(coordinator) == ["read_file", "read_tool_result", "bash", "task", "write_todos"]
+    assert _tool_names(coordinator) == ["read_file", "glob", "grep", "edit_file", "write_file", "read_tool_result", "bash", "task", "write_todos"]
 
 
 def test_enabled_environment_registers_bash_tool(
@@ -100,7 +100,7 @@ def test_enabled_environment_registers_bash_tool(
         run_timeout_seconds=10,
     )
 
-    assert _tool_names(coordinator) == ["read_file", "read_tool_result", "bash", "task", "write_todos"]
+    assert _tool_names(coordinator) == ["read_file", "glob", "grep", "edit_file", "write_file", "read_tool_result", "bash", "task", "write_todos"]
 
 
 def test_load_docker_runner_from_environment(

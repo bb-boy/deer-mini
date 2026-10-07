@@ -20,3 +20,6 @@ python-multipart==0.0.32
 
 # Tavily 官方搜索客户端；提供异步网页搜索
 tavily-python==0.7.23
+
+# 原生 grep 的有界正则匹配
+regex==2026.9.29

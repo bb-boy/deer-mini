@@ -30,6 +30,9 @@ type DisplayStep = ToolProcessStep | {
 const toolPresentation = {
   bash: { label: "执行命令", icon: SquareTerminalIcon },
   read_file: { label: "读取文件", icon: BookOpenTextIcon },
+  glob: { label: "匹配文件", icon: FolderOpenIcon },
+  grep: { label: "搜索内容", icon: SearchIcon },
+  edit_file: { label: "修改文件", icon: NotebookPenIcon },
   web_search: { label: "搜索网页", icon: SearchIcon },
   web_fetch: { label: "读取网页", icon: GlobeIcon },
   write_file: { label: "写入文件", icon: NotebookPenIcon },
@@ -44,7 +47,10 @@ function ToolStep({ step, onCopy }: { step: ToolProcessStep; onCopy?: AssistantP
   const args = step.arguments ?? {};
   const label = typeof args.description === "string" && args.description.trim()
     ? args.description : presentation.label;
-  const rawHint = args.path ?? args.command ?? args.url ?? args.query;
+  const rawHint = step.name === "glob" || step.name === "grep"
+    ? [typeof args.path === "string" ? args.path : "workspace", args.pattern]
+      .filter((value): value is string => typeof value === "string").join(" · ")
+    : args.path ?? args.command ?? args.url ?? args.query;
   const hint = typeof rawHint === "string" ? rawHint.replace(/\s+/g, " ") : "";
   const phase = { pending: "等待执行", running: "正在运行", finished: "已返回", unconfirmed: "未收到结果" }[step.phase];
   const todos = step.name === "write_todos" && step.phase === "finished"

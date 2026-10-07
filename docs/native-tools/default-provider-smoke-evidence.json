@@ -1,0 +1,13 @@
+{
+  "date": "2026-10-07T16:42:53.797628+08:00",
+  "model": "siliconflow-deepseek-flash",
+  "purpose": "isolated streaming provider smoke, no tools",
+  "thinking_enabled": false,
+  "model_requests": 1,
+  "sdk_max_retries": 0,
+  "passed": true,
+  "text_delta_fragments": 7,
+  "text_delta_characters": 17,
+  "completed_assistant_response": true,
+  "seconds": 2.39
+}

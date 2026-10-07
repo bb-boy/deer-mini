@@ -75,6 +75,18 @@ class WorkspaceContextMiddleware(AgentMiddleware):
             if "bash" in tool_names
             else ""
         )
+        file_guidance = {
+            "glob": "glob 按文件名模式定位文件，**/*.py 也包含顶层文件。\n",
+            "grep": "grep 搜索文件内容，返回路径和行号；关注 truncated/skipped，结果不完整时缩小搜索范围。\n",
+            "read_file": "read_file 可先按 base（起始行号）和 offset（行数）局部读取；line_numbers=true 显示行号。\n",
+            "edit_file": "edit_file 用精确 old_string 修改；默认要求唯一匹配，多处替换需显式 replace_all=true；old_string 不要包含展示行号。\n",
+            "write_file": "write_file 用于创建完整文件，覆盖现有文件需显式 overwrite=true；交付成果写入 outputs/。\n",
+        }
+        native_hint = "".join(
+            guidance for name, guidance in file_guidance.items() if name in tool_names
+        )
+        if "read_file" in tool_names and "edit_file" in tool_names:
+            native_hint += "编辑前用 read_file 的 preserve_newlines=true、line_numbers=false 获取原文，保留 CRLF/CR 换行供精确匹配。\n"
         system_message = Message(
             role="system",
             content=(
@@ -85,12 +97,13 @@ class WorkspaceContextMiddleware(AgentMiddleware):
                 f"工具工作目录：{VIRTUAL_WORKSPACE}\n"
                 f"上传目录：{VIRTUAL_ROOT / 'uploads'}\n"
                 f"交付目录：{VIRTUAL_ROOT / 'outputs'}\n"
-                "read_file 的 test-large.txt 与 workspace/test-large.txt "
+                "原生文件工具中的 test-large.txt 与 workspace/test-large.txt "
                 "都表示工作区根目录中的文件；也可使用 /mnt/user-data 下的完整工具路径。\n"
                 f"可用工具：{available_tools}\n"
 
                 f"{upload_hint}"
                 f"{bash_hint}"
+                f"{native_hint}"
             ),
         )
         state.messages.insert(0, system_message)

@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-07T17:18:29.666540+08:00",
+  "head": "e25a655f330e5783e63f1025182529294ce8e40b",
+  "branch": "native-tools",
+  "test_execution_sha256": "286d43e6b744eb0460aff5caa68e13aa32b250a392adaee9ca6cd13367c9bd66",
+  "final_test_sha256": "77a939515370c34e923e6b22ccbbcd160ec1aec14cb6e8fa2059c3d3f261f6ab",
+  "core_test_ast_sha256": "3bc267ff8f0156f798c67ef4018a3d354165a32a6bb8daec4716e6668415e490",
+  "prior_16_files_digest": "dafcea035f931b35cf4be3fb772f44f0c28866de0e6273ff5c46e2be331a5c32",
+  "files": {
+    "docs/native-tools/basic-live-chain-evidence.json": "f27f6d6e0e597d5cf935ea1aac3cbfbfa0997a7c58602e999e69a4070ba8f93b",
+    "docs/native-tools/default-mode-regression-evidence.json": "60d19a8a70f1bd3130e90dd1af8e1dd3149a4487b8130c8a633eab4d3f3f95fc",
+    "docs/native-tools/default-provider-smoke-evidence.json": "27c61588c9227679ff57b53b62b15d530831f558ceacdb99522ba04994b96f6c",
+    "docs/native-tools/existing-live-agent-evidence.json": "adb676c1113a87aa30f77269b845aea641e318b291da235de8ab1621ad78dfb1",
+    "docs/native-tools/external-validation.md": "58897c5e9db744c473ab296a770fd03d6d34461393bced0197e809567a6ce407",
+    "docs/native-tools/live-docker-evidence.json": "f16de040de60ead407fefcfc69e0d5dfaf42a50c3fa062c7470b45e77ef197c0",
+    "docs/native-tools/live-model-evidence.json": "273d92d1e486aa0ba9966777c8f510600bc1705f4f47caa231dc34a91e58a68f",
+    "docs/native-tools/provider-connectivity-evidence.json": "abee1e3974194d48708a07fa16c102fe0f177f16bc83ed4f1773021883ed12fc",
+    "docs/native-tools/verification.md": "3f6feeb54939fdf60e62c88b4b074ea493364f17d3a47eff3b0b2ad5e7762e4c"
+  },
+  "review": {
+    "code_quality": "PASS",
+    "default_siliconflow_spec": "PASS",
+    "default_scope_recommendation": "APPROVE",
+    "full_external_spec": "FAIL",
+    "ustc": "two live tests failed, TCP connection timeout"
+  }
+}

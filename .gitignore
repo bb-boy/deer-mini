@@ -16,3 +16,8 @@ backend/data/*.db
 
 # Project-local development worktrees
 /.worktree/
+
+# Local credentials and editor metadata
+.env.*
+!.env.example
+.DS_Store

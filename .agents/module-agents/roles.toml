@@ -1,0 +1,20 @@
+# 项目角色配置；同名角色完整覆盖用户级配置。
+# 未列出的角色默认继承主 Agent。
+[defaults]
+mode = "inherit"
+
+[roles.module-developer]
+mode = "custom"
+provider = "study"
+model = "glm-5.3-flash"
+effort = "max"
+
+[roles.module-reviewer]
+mode = "inherit"
+# 可选：单独覆盖推理强度；不填写则继承主 Agent。
+# effort = "high"
+
+[providers.study]
+# 优先从本项目根目录的 .env 获取，缺失时回退进程环境变量。
+base_url_env = "MODULE_AGENTS_BASE_URL"
+api_key_env = "MODULE_AGENTS_API_KEY"

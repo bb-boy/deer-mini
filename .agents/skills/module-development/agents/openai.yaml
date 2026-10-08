@@ -1,0 +1,4 @@
+interface:
+  display_name: "模块开发"
+  short_description: "按任务复杂度组织需求、开发、独立审查与验证，适用于不同项目和技术栈"
+  default_prompt: "使用 $module-development，按任务复杂度选择流程，沿用已确认需求，完成实现、必要验证，以及适用的独立审查和修复复审。"

@@ -1,0 +1,11 @@
+# 仅供本项目的独立开发者进程使用；不由主 agent 的配置加载器读取。
+model = "deepseek-ai/DeepSeek-V4-Flash"
+model_reasoning_effort = "low"
+model_reasoning_summary = "none"
+
+[provider]
+id = "project_deepseek"
+name = "Project developer DeepSeek"
+base_url = "https://ai.ilovestudy.de/v1"
+# 相对于本项目根目录；真实凭据位于 Git 忽略的普通文件中。
+key_file = ".codex/secrets/module-developer.key"

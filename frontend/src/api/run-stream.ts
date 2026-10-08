@@ -1,4 +1,5 @@
 import type { Checkpoint, RunEvent } from "./types";
+import { apiUrl } from "./api-url";
 
 const TERMINAL_EVENTS = new Set<RunEvent["event_type"]>([
   "run.end", "run.error", "run.timeout", "run.interrupted",
@@ -34,7 +35,7 @@ function parseRunEvent(raw: string): RunEvent {
 export function openRunStream(options: OpenRunStreamOptions): () => void {
   const query = new URLSearchParams({ user_id: options.userId });
   const url = `/api/threads/${encodeURIComponent(options.threadId)}/runs/${encodeURIComponent(options.runId)}/events?${query.toString()}`;
-  const source = new EventSource(url);
+  const source = new EventSource(apiUrl(url));
   const seenCursors = new Set<string>();
   let closed = false;
   const close = () => {

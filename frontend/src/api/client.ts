@@ -1,4 +1,5 @@
 import type { Checkpoint, ModelsResponse, RestoreInput, RestoreOperation, RestorePoint, RestorePreview, Run, Thread, WorkspaceFile } from "./types";
+import { apiUrl } from "./api-url";
 
 
 export class ApiError extends Error {
@@ -17,7 +18,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("content-type", "application/json");
   }
 
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(apiUrl(path), { ...init, headers });
   if (!response.ok) {
     let detail = `请求失败（HTTP ${response.status}）`;
     try {
@@ -177,7 +178,7 @@ export function workspaceFileDownloadUrl(
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
-  return `/api/threads/${encodeURIComponent(threadId)}/files/${encodedPath}?${userQuery(userId)}`;
+  return apiUrl(`/api/threads/${encodeURIComponent(threadId)}/files/${encodedPath}?${userQuery(userId)}`);
 }
 
 export function listRestorePoints(threadId: string, userId: string): Promise<RestorePoint[]> {

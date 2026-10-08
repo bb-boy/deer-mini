@@ -37,9 +37,23 @@ class FakeEventSource {
 afterEach(() => {
   FakeEventSource.latest = null;
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("openRunStream", () => {
+  it("opens the event stream under the deployment base", () => {
+    vi.stubEnv("BASE_URL", "/ai/");
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const close = openRunStream({
+      threadId: "thread/1", runId: "run 1", userId: "alice@example.com",
+      onEvent: vi.fn(), onTerminal: vi.fn(), onConnectionError: vi.fn(),
+    });
+    expect(FakeEventSource.latest!.url)
+      .toBe("/ai/api/threads/thread%2F1/runs/run%201/events?user_id=alice%40example.com");
+    close();
+    expect(FakeEventSource.latest!.closed).toBe(true);
+  });
+
   it("deduplicates by live cursor and accepts unsaved event payloads", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     const onEvent = vi.fn();

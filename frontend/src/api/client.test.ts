@@ -8,16 +8,31 @@ import {
   getRestoreOperation,
   deleteThread,
   getLatestState,
+  getModels,
   listThreads,
   renameThread,
+  workspaceFileDownloadUrl,
 } from "./client";
 
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("API client", () => {
+  it("keeps API and encoded file URLs under the deployment base", async () => {
+    vi.stubEnv("BASE_URL", "/ai/");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await getModels();
+    expect(fetchMock).toHaveBeenCalledWith("/ai/api/models", expect.any(Object));
+    expect(workspaceFileDownloadUrl("thread/1", "alice@example.com", "outputs/a b.txt"))
+      .toBe("/ai/api/threads/thread%2F1/files/outputs/a%20b.txt?user_id=alice%40example.com");
+  });
+
   it("uses owned restore endpoints and preserves the idempotent operation input", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),

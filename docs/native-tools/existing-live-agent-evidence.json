@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-07T16:38:34.804357+08:00",
+  "worktree": "/home/pl/deer_mini/.worktree/native-tools",
+  "branch": "native-tools",
+  "model": "ustc-deepseek-flash",
+  "head": "e25a655f330e5783e63f1025182529294ce8e40b",
+  "arguments": [
+    "tests/app/agents/test_lead_agent.py::test_agent_loop_with_live_model",
+    "tests/app/agents/test_bash_agent_loop_live.py::test_live_model_can_choose_real_docker_bash",
+    "-q",
+    "--tb=no",
+    "--show-capture=no",
+    "-rN",
+    "--basetemp",
+    "<temporary-path>"
+  ],
+  "environment": {
+    "RUN_DOCKER_SANDBOX_TEST": "1",
+    "RUN_LIVE_AGENT_TEST": "1",
+    "storage": "fresh temporary directories",
+    "max_attempts": 1,
+    "sdk_max_retries": 0
+  },
+  "exit_code": 1,
+  "seconds": 22.53,
+  "tests": [
+    {
+      "test": "tests/app/agents/test_lead_agent.py::test_agent_loop_with_live_model",
+      "phase": "call",
+      "outcome": "failed",
+      "seconds": 10.828
+    },
+    {
+      "test": "tests/app/agents/test_bash_agent_loop_live.py::test_live_model_can_choose_real_docker_bash",
+      "phase": "call",
+      "outcome": "failed",
+      "seconds": 10.012
+    }
+  ],
+  "errors": [
+    {
+      "test": "tests/app/agents/test_lead_agent.py::test_agent_loop_with_live_model",
+      "error_type": "ModelCallError",
+      "status_code": null
+    },
+    {
+      "test": "tests/app/agents/test_bash_agent_loop_live.py::test_live_model_can_choose_real_docker_bash",
+      "error_type": "ModelCallError",
+      "status_code": null
+    }
+  ]
+}

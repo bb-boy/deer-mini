@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-07T16:57:59.822793+08:00",
+  "model": "siliconflow-deepseek-flash",
+  "thinking_enabled": false,
+  "run_model_round_limit": 8,
+  "scope": "native-basic-test-e4278d2be59749119a0ee9a3d85da6d8",
+  "result": "passed",
+  "run_status": "success",
+  "tool_names": [
+    "bash",
+    "edit_file",
+    "glob",
+    "grep",
+    "read_file",
+    "write_file"
+  ],
+  "tool_end_count": 6,
+  "restore_committed": true,
+  "messages_restored": true,
+  "files_restored": true,
+  "persisted_event_count": 26,
+  "model_request_attempts": 4,
+  "tool_events": [
+    {
+      "tool": "glob",
+      "is_error": false
+    },
+    {
+      "tool": "grep",
+      "is_error": false
+    },
+    {
+      "tool": "read_file",
+      "is_error": false
+    },
+    {
+      "tool": "edit_file",
+      "is_error": false
+    },
+    {
+      "tool": "write_file",
+      "is_error": false
+    },
+    {
+      "tool": "bash",
+      "is_error": false
+    }
+  ],
+  "seconds": 7.59,
+  "remaining_scope_containers": 0
+}

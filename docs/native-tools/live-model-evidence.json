@@ -1,0 +1,516 @@
+[
+  {
+    "recorded_at": "2026-10-07T16:48:16.187878+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": false,
+    "reasoning_effort": null,
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "result": "failed",
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "failure_type": "ValueError",
+    "model_request_attempt_count": 0,
+    "failure_stage": "Run creation; no model request started"
+  },
+  {
+    "recorded_at": "2026-10-07T16:48:16.459607+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": true,
+    "reasoning_effort": "medium",
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "result": "failed",
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "failure_type": "ValueError",
+    "model_request_attempt_count": 0,
+    "failure_stage": "Run creation; no model request started"
+  },
+  {
+    "recorded_at": "2026-10-07T16:48:31.608706+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": false,
+    "reasoning_effort": null,
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "result": "failed",
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "failure_type": "ValueError",
+    "model_request_attempt_count": 0,
+    "failure_stage": "Run creation; no model request started"
+  },
+  {
+    "recorded_at": "2026-10-07T16:50:18.964398+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": false,
+    "reasoning_effort": null,
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "result": "failed",
+    "failure_type": "RuntimeError",
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "run_status": "error",
+    "model_request_attempt_count": null,
+    "failure_stage": "Earlier failure; event trace unavailable"
+  },
+  {
+    "recorded_at": "2026-10-07T16:50:58.032226+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": false,
+    "reasoning_effort": null,
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "result": "failed",
+    "failure_type": "RuntimeError",
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "run_status": "error",
+    "model_request_attempt_count": null,
+    "failure_stage": "Earlier failure; event trace unavailable"
+  },
+  {
+    "recorded_at": "2026-10-07T16:56:41.331730+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": false,
+    "reasoning_effort": null,
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "max_tool_rounds": 8,
+    "result": "failed",
+    "model_request_attempt_count": 8,
+    "tool_names": [
+      "bash",
+      "edit_file",
+      "glob",
+      "grep",
+      "read_file",
+      "write_file"
+    ],
+    "tool_end_count": 14,
+    "ordinary_tool_error_count": 2,
+    "ordinary_error_tool_names": [
+      "read_file",
+      "write_file"
+    ],
+    "model_failure_reasons": [],
+    "terminal_event_types": [
+      "run.error"
+    ],
+    "failure_category": "round_limit",
+    "round_limit": 8,
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "run_status": "error",
+    "failure_type": "AssertionError"
+  },
+  {
+    "recorded_at": "2026-10-07T16:58:46.177051+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": false,
+    "reasoning_effort": null,
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "max_tool_rounds": 8,
+    "result": "failed",
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "run_status": "success",
+    "failure_type": "AssertionError",
+    "model_request_attempt_count": null,
+    "failure_stage": "Earlier failure; event trace unavailable"
+  },
+  {
+    "recorded_at": "2026-10-07T17:01:21.447705+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": false,
+    "reasoning_effort": null,
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "max_tool_rounds": 8,
+    "result": "failed",
+    "runs": [
+      {
+        "run_status": "error",
+        "model_request_attempt_count": 8,
+        "tool_names": [
+          "bash",
+          "edit_file",
+          "glob",
+          "grep",
+          "read_file",
+          "write_file"
+        ],
+        "tool_name_sequence": [
+          "glob",
+          "grep",
+          "read_file",
+          "edit_file",
+          "write_file",
+          "bash",
+          "bash",
+          "write_file",
+          "bash",
+          "bash",
+          "bash"
+        ],
+        "tool_end_count": 11,
+        "ordinary_tool_error_count": 3,
+        "ordinary_error_tool_names": [
+          "bash",
+          "write_file"
+        ],
+        "model_failure_reasons": [],
+        "reasoning_character_count": 0,
+        "failure_category": "round_limit",
+        "round_limit": 8
+      }
+    ],
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "failure_type": "AssertionError",
+    "model_request_attempt_count": 8,
+    "failure_stage": "Failure details are summarized by Run in runs"
+  },
+  {
+    "recorded_at": "2026-10-07T17:02:12.528310+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": true,
+    "reasoning_effort": "medium",
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "max_tool_rounds": 8,
+    "result": "failed",
+    "runs": [
+      {
+        "run_status": "success",
+        "model_request_attempt_count": 7,
+        "tool_names": [
+          "bash",
+          "edit_file",
+          "glob",
+          "grep",
+          "read_file",
+          "write_file"
+        ],
+        "tool_name_sequence": [
+          "glob",
+          "grep",
+          "read_file",
+          "bash",
+          "bash",
+          "bash",
+          "edit_file",
+          "write_file",
+          "bash"
+        ],
+        "tool_end_count": 9,
+        "ordinary_tool_error_count": 0,
+        "ordinary_error_tool_names": [],
+        "model_failure_reasons": [],
+        "reasoning_character_count": 9895,
+        "model_name": "siliconflow-deepseek-flash",
+        "thinking_enabled": true
+      },
+      {
+        "run_status": "success",
+        "model_request_attempt_count": 5,
+        "tool_names": [
+          "bash",
+          "edit_file",
+          "read_file",
+          "write_file"
+        ],
+        "tool_name_sequence": [
+          "read_file",
+          "bash",
+          "edit_file",
+          "write_file",
+          "bash",
+          "edit_file",
+          "write_file"
+        ],
+        "tool_end_count": 7,
+        "ordinary_tool_error_count": 1,
+        "ordinary_error_tool_names": [
+          "write_file"
+        ],
+        "model_failure_reasons": [],
+        "reasoning_character_count": 4897,
+        "model_name": "siliconflow-deepseek-flash",
+        "thinking_enabled": true
+      }
+    ],
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "failure_type": "AssertionError",
+    "model_request_attempt_count": 12,
+    "failure_stage": "Failure details are summarized by Run in runs"
+  },
+  {
+    "recorded_at": "2026-10-07T17:06:22.277288+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": true,
+    "reasoning_effort": "medium",
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "max_tool_rounds": 8,
+    "result": "failed",
+    "runs": [
+      {
+        "run_status": "success",
+        "model_request_attempt_count": 6,
+        "tool_names": [
+          "bash",
+          "edit_file",
+          "glob",
+          "grep",
+          "read_file",
+          "write_file"
+        ],
+        "tool_name_sequence": [
+          "glob",
+          "grep",
+          "read_file",
+          "edit_file",
+          "write_file",
+          "bash"
+        ],
+        "tool_end_count": 6,
+        "ordinary_tool_error_count": 0,
+        "ordinary_error_tool_names": [],
+        "model_failure_reasons": [],
+        "reasoning_character_count": 6145,
+        "model_name": "siliconflow-deepseek-flash",
+        "thinking_enabled": true
+      },
+      {
+        "run_status": "success",
+        "model_request_attempt_count": 7,
+        "tool_names": [
+          "bash",
+          "edit_file",
+          "read_file",
+          "write_file"
+        ],
+        "tool_name_sequence": [
+          "read_file",
+          "read_file",
+          "edit_file",
+          "bash",
+          "write_file",
+          "edit_file",
+          "write_file"
+        ],
+        "tool_end_count": 7,
+        "ordinary_tool_error_count": 1,
+        "ordinary_error_tool_names": [
+          "write_file"
+        ],
+        "model_failure_reasons": [],
+        "reasoning_character_count": 5353,
+        "model_name": "siliconflow-deepseek-flash",
+        "thinking_enabled": true
+      }
+    ],
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "failure_type": "AssertionError",
+    "model_request_attempt_count": 13,
+    "failure_stage": "Failure details are summarized by Run in runs"
+  },
+  {
+    "recorded_at": "2026-10-07T17:10:16.014039+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": false,
+    "reasoning_effort": null,
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "max_tool_rounds": 8,
+    "result": "passed",
+    "runs": [
+      {
+        "run_status": "success",
+        "model_request_attempt_count": 6,
+        "tool_names": [
+          "bash",
+          "edit_file",
+          "glob",
+          "grep",
+          "read_file",
+          "write_file"
+        ],
+        "tool_name_sequence": [
+          "glob",
+          "grep",
+          "read_file",
+          "edit_file",
+          "write_file",
+          "bash"
+        ],
+        "tool_end_count": 6,
+        "ordinary_tool_error_count": 0,
+        "ordinary_error_tool_names": [],
+        "tool_error_categories": [],
+        "model_failure_reasons": [],
+        "reasoning_character_count": 0,
+        "model_name": "siliconflow-deepseek-flash",
+        "thinking_enabled": false
+      },
+      {
+        "run_status": "success",
+        "model_request_attempt_count": 7,
+        "tool_names": [
+          "bash",
+          "edit_file",
+          "read_file",
+          "write_file"
+        ],
+        "tool_name_sequence": [
+          "read_file",
+          "edit_file",
+          "bash",
+          "write_file",
+          "read_file",
+          "edit_file",
+          "write_file"
+        ],
+        "tool_end_count": 7,
+        "ordinary_tool_error_count": 1,
+        "ordinary_error_tool_names": [
+          "write_file"
+        ],
+        "tool_error_categories": [
+          {
+            "tool": "write_file",
+            "category": "already_exists"
+          }
+        ],
+        "model_failure_reasons": [],
+        "reasoning_character_count": 0,
+        "model_name": "siliconflow-deepseek-flash",
+        "thinking_enabled": false
+      }
+    ],
+    "checkpoint_restore": "Run 1 turn_start committed and cleaned; source/collision restored, added files removed",
+    "report_bytes_before_restore": 11,
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "test_file_sha256": "286d43e6b744eb0460aff5caa68e13aa32b250a392adaee9ca6cd13367c9bd66",
+    "pytest_command": "RUN_NATIVE_TOOLS_LIVE_TEST=1 with fresh absolute DEER_MINI_DATABASE_PATH and DEER_MINI_DATA_ROOT under /tmp; LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false LANGSMITH_API_KEY= DEER_MINI_MODEL_MAX_ATTEMPTS=1 .venv/bin/python -m pytest tests/app/agents/test_native_tools_live.py -q --tb=no --show-capture=no",
+    "pytest_exit_code": 0,
+    "suite_duration_seconds": 99.55,
+    "report_bytes_after_second_run": 53,
+    "isolation": "isolated pytest process; per-test temporary SQLite/Data Root; main checkout .env loaded override=false"
+  },
+  {
+    "recorded_at": "2026-10-07T17:11:15.872391+08:00",
+    "model_profile": "siliconflow-deepseek-flash",
+    "thinking_enabled": true,
+    "reasoning_effort": "medium",
+    "docker_image": "python:3.12-slim",
+    "container_scope_prefix": "native-live-test-",
+    "run_timeout_seconds": 300,
+    "model_max_attempts": 1,
+    "max_tool_rounds": 8,
+    "result": "passed",
+    "runs": [
+      {
+        "run_status": "success",
+        "model_request_attempt_count": 6,
+        "tool_names": [
+          "bash",
+          "edit_file",
+          "glob",
+          "grep",
+          "read_file",
+          "write_file"
+        ],
+        "tool_name_sequence": [
+          "glob",
+          "grep",
+          "read_file",
+          "edit_file",
+          "write_file",
+          "bash"
+        ],
+        "tool_end_count": 6,
+        "ordinary_tool_error_count": 0,
+        "ordinary_error_tool_names": [],
+        "tool_error_categories": [],
+        "model_failure_reasons": [],
+        "reasoning_character_count": 1304,
+        "model_name": "siliconflow-deepseek-flash",
+        "thinking_enabled": true
+      },
+      {
+        "run_status": "success",
+        "model_request_attempt_count": 5,
+        "tool_names": [
+          "bash",
+          "edit_file",
+          "read_file",
+          "write_file"
+        ],
+        "tool_name_sequence": [
+          "read_file",
+          "read_file",
+          "edit_file",
+          "write_file",
+          "bash",
+          "edit_file",
+          "write_file"
+        ],
+        "tool_end_count": 7,
+        "ordinary_tool_error_count": 1,
+        "ordinary_error_tool_names": [
+          "write_file"
+        ],
+        "tool_error_categories": [
+          {
+            "tool": "write_file",
+            "category": "already_exists"
+          }
+        ],
+        "model_failure_reasons": [],
+        "reasoning_character_count": 4476,
+        "model_name": "siliconflow-deepseek-flash",
+        "thinking_enabled": true
+      }
+    ],
+    "checkpoint_restore": "Run 1 turn_start committed and cleaned; source/collision restored, added files removed",
+    "report_bytes_before_restore": 11,
+    "docker_cleanup": "confirmed; scope has no containers after shutdown",
+    "docker_cleanup_confirmed": true,
+    "test_file_sha256": "286d43e6b744eb0460aff5caa68e13aa32b250a392adaee9ca6cd13367c9bd66",
+    "pytest_command": "RUN_NATIVE_TOOLS_LIVE_TEST=1 with fresh absolute DEER_MINI_DATABASE_PATH and DEER_MINI_DATA_ROOT under /tmp; LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING=false LANGSMITH_API_KEY= DEER_MINI_MODEL_MAX_ATTEMPTS=1 .venv/bin/python -m pytest tests/app/agents/test_native_tools_live.py -q --tb=no --show-capture=no",
+    "pytest_exit_code": 0,
+    "suite_duration_seconds": 99.55,
+    "report_bytes_after_second_run": 53,
+    "isolation": "isolated pytest process; per-test temporary SQLite/Data Root; main checkout .env loaded override=false"
+  }
+]

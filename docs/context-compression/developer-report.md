@@ -91,3 +91,34 @@
 本次新增 11 项回归，总计 69 项新增压缩测试；855 项原始基线测试也全部通过。14 skipped 和依赖弃用 warning 与此前一致；没有新环境阻塞、没有真实服务验证或部署。AC-4、AC-5、AC-7 的校准与恢复覆盖得到补全，其他验收项的回归全部通过。
 
 最终稳定后端内容摘要（仍为 26 个后端变更文件，算法同上）：`8a7531b3fa587538b762879a3240904997a03133000d12e00ed695c7454b5e6a`。需求 SHA256 保持 `dc752df10012800e7e9339a587932395ea9ccb59e41812775413170108be4c8e`，HEAD/分支未改变。没有修改 frontend 或需求，也未暂存、提交、推送、合并、部署。本报告追加完成后再次冻结 backend 与报告写入，等待原 reviewer 复审。
+
+## native-tools 合并集成交回（2026-10-08）
+
+状态：DONE（后端合并、自查与组合验证完成；远端同步、部署和独立复审由主 agent 继续）。
+
+本次仍在唯一 MODULE_WORKTREE `/Users/jk/Documents/ChatGPT/de/.worktree/deer-mini-source/.worktree/context-compression`、分支 `context-compression` 工作。开始时 HEAD 为 `d92420730a46be47e563afc3d22b6eed29ff88eb`，主 agent 已执行未提交合并 `origin/native-tools`，其目标提交为 `24badd8950d4952a0b4bfbfde46ca04d8060e71e`。没有切换分支、创建新工作树或访问 inA 服务。
+
+合并检查与变更：
+
+- 解决 `test_run_coordinator_tools.py`、`test_task_flow.py`、`test_todo_flow.py` 三处冲突，完整保留 `read_file/glob/grep/edit_file/write_file/read_tool_result` 和 `snip` 预期。仅按主 agent 授权对这三个文件显式 `git add` 标记解决；其他暂存内容来自主 agent 已启动的合并。
+- 检查全部后端生产文件的合并差异。Coordinator 的原生工具注册和已有 task/todos/Snip 同时保留；压缩仍在 memory/todos/workspace 请求注入之后。子 Agent 继承原生能力，独立注册 Snip，主子校准、reasoning、usage 与持久化逻辑未被 native 分支覆盖。
+- 原生读/写/编辑共用 Thread 路径边界与受限 IO；glob/grep 继续跳过 `.tool-results`，压缩生成的历史结果引用由 `read_tool_result` 专用入口读取。原生工具名称已在压缩可恢复白名单中，未知/错误/Task/todos 的保护规则保持不变。
+- 新增 `tests/app/context_compression/test_native_tools.py`，经真实 LeadAgent/ToolExecutor 执行九个原生文件调用，随后在新 Run 触发 idle 清理、读取原始 edit diff、调用 Snip，再确认完整原历史和 reasoning 保留。验证前四个旧结果被引用替换、总体保留最近五个、写入与编辑各只执行一次，Snip/idle 后 2 倍保守校准继续保存，恢复后的压缩元数据一致。
+- 在现有 `test_native_commit_uncertainty_stops_runtime_without_model_retry` 中加入工作区与压缩中间件，验证真实原生文件提交不确定性仍传递 `StatePersistenceError`、Runtime 标记 error、模型与写操作不被重放。
+- 没有发现需修改生产实现的功能合并缺陷。文本冲突先通过代码对照解决；本次未出现可重复的组合功能失败，因此不虚构 bug 的失败/通过证据。
+
+环境与验证：现有隔离 `.venv` 的 `regex` 已为 `2026.9.29`，满足 native 新增 requirements，无需安装或修改依赖配置。以下命令均在 MODULE_WORKTREE/backend 执行；显式设置 `RUN_NATIVE_TOOLS_LIVE_TEST=0`，保障真实模型/Docker验收用例不运行。原生工具和压缩功能保持启用，使用真实临时文件、临时 SQLite 与 mock 模型。
+
+|阶段|命令/证据|退出状态与结果|
+|---|---|---|
+|分支基线（主 agent 提供）|context 独立版本、native 独立版本各自验证记录|context：924 passed/14 skipped；native：943 passed/13 skipped；不将不同分支用例数直接相加作为组合结果|
+|解决冲突后的组合定向基线|`RUN_NATIVE_TOOLS_LIVE_TEST=0 .venv/bin/python -m pytest tests/app/context_compression tests/app/tools/test_native_file_tools.py tests/app/agents/test_native_tools_integration.py tests/app/agents/test_workspace_virtual_context.py tests/app/services/test_run_coordinator_tools.py tests/app/services/test_task_flow.py tests/app/services/test_todo_flow.py tests/app/subagents/test_subagent_executor.py -q`；`/tmp/deer-context-native-merge-targeted-before.log`|0；209 passed、1 warning，9.16 秒|
+|新增真实组合循环与失败边界|`RUN_NATIVE_TOOLS_LIVE_TEST=0 .venv/bin/python -m pytest tests/app/context_compression/test_native_tools.py tests/app/agents/test_native_tools_integration.py -q`；`/tmp/deer-context-native-combined-loop.log`|0；4 passed、1 warning，0.71 秒|
+|完整后端组合回归|`RUN_NATIVE_TOOLS_LIVE_TEST=0 .venv/bin/python -m pytest tests/app --ignore=tests/app/model/test_factory.py -q`；`/tmp/deer-context-native-merged-backend.log`|0；**1012 passed、16 skipped、1 warning，39.79 秒**|
+|合并与空白检查|`git diff --name-only --diff-filter=U`、`git diff --cached --check`、`git diff --check`|0；无未解决冲突，无空白错误|
+
+16 skipped 包含 context 既有 14 项及 native 两个显式 opt-in 真实模型/Docker用例；唯一 warning 仍为 langsmith 依赖弃用提示。未执行真实模型、线上数据验证或任何服务变更。测试验证不替代独立 review 或部署后的实际检查。
+
+最终稳定后端树摘要：`a54809ec2b194c6d6922e6cfd52cb2141e8c34ff671358376651ecd34015b4aa`，共 247 文件。**本次使用完整后端树口径**：`git ls-files --cached --others --exclude-standard -- backend` 去重排序，对每个当前文件依次拼接 UTF-8 路径、NUL、文件内容、NUL，计算 SHA256；这样同时覆盖暂存的合并文件、未暂存更新和新增组合测试，不依赖当前索引状态。此摘要与前文仅对变更文件计数的摘要口径不同。
+
+主 agent 提交前还需纳入本开发者未暂存更新 `backend/tests/app/agents/test_native_tools_integration.py`、新增 `backend/tests/app/context_compression/test_native_tools.py` 以及本报告追加；本开发者未对它们自行暂存。未提交、推送、合并完成或部署。报告写入后冻结 backend 与本报告，交主 agent 和原 reviewer 复审。

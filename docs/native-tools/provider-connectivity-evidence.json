@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-07",
+  "location": "tx",
+  "probe": "configured provider DNS/TCP/TLS; no API key sent",
+  "tcp_timeout_seconds": 5,
+  "providers": [
+    {
+      "name": "USTC_LLM",
+      "dns_resolved": true,
+      "tcp_connected": false,
+      "tls_connected": false,
+      "error_type": "TimeoutError",
+      "seconds": 5.33
+    },
+    {
+      "name": "SILICONFLOW_LLM",
+      "dns_resolved": true,
+      "tcp_connected": true,
+      "tls_connected": true,
+      "seconds": 0.15
+    }
+  ]
+}

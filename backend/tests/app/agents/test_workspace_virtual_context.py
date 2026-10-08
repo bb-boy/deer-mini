@@ -32,7 +32,8 @@ def test_system_context_hides_host_path_and_replaces_legacy_context(tmp_path, ha
     assert '/mnt/user-data/workspace' in system
     assert '/mnt/user-data/uploads' in system
     assert '/mnt/user-data/outputs' in system
-    assert 'read_file' in system and 'test-large.txt' in system
+    assert 'read_file' not in system
+    assert 'test-large.txt' in system
     if has_bash:
         assert 'bash 默认从 /mnt/user-data/workspace' in system
         assert 'workspace/test-large.txt' in system

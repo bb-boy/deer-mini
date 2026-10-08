@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-07T17:12:29.420009+08:00",
+  "worktree": "/home/pl/deer_mini/.worktree/native-tools",
+  "arguments": [
+    "tests/app/agents/test_native_tools_integration.py",
+    "tests/app/agents/test_native_tools_live.py",
+    "-q",
+    "--tb=short",
+    "--basetemp",
+    "<temporary-path>"
+  ],
+  "external_flags": "all disabled",
+  "tests": [
+    {
+      "test": "tests/app/agents/test_native_tools_integration.py::test_native_tool_loop_and_checkpoint_restore",
+      "outcome": "passed"
+    },
+    {
+      "test": "tests/app/agents/test_native_tools_integration.py::test_tool_guidance_only_mentions_registered_capabilities",
+      "outcome": "passed"
+    },
+    {
+      "test": "tests/app/agents/test_native_tools_integration.py::test_native_commit_uncertainty_stops_runtime_without_model_retry",
+      "outcome": "passed"
+    },
+    {
+      "test": "tests/app/agents/test_native_tools_live.py::test_real_model_native_tools_end_to_end[non-thinking]",
+      "outcome": "skipped"
+    },
+    {
+      "test": "tests/app/agents/test_native_tools_live.py::test_real_model_native_tools_end_to_end[thinking]",
+      "outcome": "skipped"
+    }
+  ],
+  "exit_code": 0,
+  "seconds": 2.05
+}

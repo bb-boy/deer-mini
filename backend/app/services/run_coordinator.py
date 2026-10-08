@@ -43,6 +43,10 @@ from app.services.thread_service import (
 from app.subagents.middleware import SubagentMiddleware
 from app.tools.bash import BashTool
 from app.tools.executor import ToolExecutor
+from app.tools.glob import GlobTool
+from app.tools.grep import GrepTool
+from app.tools.edit_file import EditFileTool
+from app.tools.write_file import WriteFileTool
 from app.tools.read_file_rewrite import ReadFileTool
 from app.tools.read_tool_result import ReadToolResultTool
 from app.tools.snip import SnipTool
@@ -130,6 +134,10 @@ class RunCoordinator:
         """创建一次 Run 使用的工具表，避免在不同入口重复开关逻辑。"""
         registry = ToolRegistry()
         registry.register(ReadFileTool())
+        registry.register(GlobTool())
+        registry.register(GrepTool())
+        registry.register(EditFileTool())
+        registry.register(WriteFileTool())
         registry.register(ReadToolResultTool())
         if self._bash_runner is not None:
             registry.register(BashTool(self._bash_runner))

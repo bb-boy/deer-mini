@@ -37,4 +37,16 @@
 
 inA 发布前快照已保存至仓库外 `/home/pl/deer-mini-deploy-backups/20261008-context-integration-p9ig5mr0`（0700），含 SQLite backup API 快照（quick_check ok）、现有用户文件、`.env` 与原代理配置。凭据未输出或进入 Git。
 
-状态：实现与独立审查完成，进入已授权的 GitHub main 发布、inA 快进同步及部署验收。
+## 发布与实际验收
+
+- 合并提交 `93abc4f`；`/ai` 适配提交 `43a03bd62dda2fc85c0ac5234dff953df9f7dca8`。已非强制推送 GitHub `main` 与 `context-compression`，inA `main` 从 `e25a655` 快进同步。
+- inA 使用现有 Python 3.12 venv 安装 requirements，`pip check` 通过；pnpm 10.30.3 冻结安装与 `/ai` 构建通过。安装/构建日志位于 inA `/tmp/deer-mini-ina-{pip-install,pnpm-install,build}.log`。
+- 单进程 `deer-mini-backend.service` 已启用且 active，绑定 `127.0.0.1:8005`，检查时 NRestarts=0。Nginx 配置检测通过后 reload；已有 Tailscale 配置未修改。
+- 静态 release 为 `/var/www/deer-mini/releases/43a03bd62dda2fc85c0ac5234dff953df9f7dca8`，`/var/www/deer-mini/current` 指向该目录。后续验收文档提交不改变运行代码或此 release 标识。
+- 目标 HTTPS `/ai` 返回 308、相对 Location `/ai/`；最终页面 200、18 个资源全部 200，`/ai/api/models` 200。API 尾斜杠重定向正确保留 HTTPS、外部 10000 端口及 `/ai` 前缀。
+- 使用随机不存在的 Thread 检查 SSE 和文件接口，均返回本应用 404 JSON。没有请求真实模型或新增用户会话。
+- inA Chrome 隔离 profile 使用随机 user_id，实际 HTTPS 页面渲染成功，编辑器存在，models/threads 请求均走 `/ai/api/` 且 200；22 个同源请求无失败，0 个 Runtime exception。截图保存在上述备份目录的 `browser-smoke.png`。
+- 本机默认 DNS/代理链连接该域名时 TLS 断连；在 Chrome 的本次隔离测试中关闭代理并把目标域名解析到 inA Tailscale IP `100.125.22.7` 后通过。本机 curl 使用同样的定向解析也返回 200。未修改用户的系统 DNS、代理或浏览器设置；默认解析链仍是客户端访问限制。
+- 原 `/`、`/healthz` 的状态码和响应内容 SHA256 与部署前完全一致。现有用户文件内容与快照一致，`.env` SHA256 保持不变；密钥和数据没有进入 Git。部署状态与 HTTP 验收 JSON 保存在上述备份目录的 `activation.json`、`http-verification.json`。
+
+状态：合并、GitHub 发布、inA 同步启动及部署验收完成。默认 DNS/代理访问限制如上；真实模型端到端调用未执行。

@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.api.routes import router
+from app.context_compression.state import CompressionState
 from app.domain.checkpoints import Checkpoint
 from app.domain.messages import Message, ToolCall
 from app.domain.subagents import SubagentTask
@@ -56,6 +57,9 @@ def test_latest_and_history_return_complete_child_records(storage_and_client):
         ],
     )
     state.subtasks[child.task_id] = child
+    state.messages.append(Message(role="user", content="继续查阅"))
+    state.compression = CompressionState(snipped_ids=[state.messages[0].id])
+    child.compression = CompressionState(growth_tokens=123, last_api_at=456.0)
     repository.save(Checkpoint(thread_id=thread.id, run_id=run.id, step=2, state=state))
 
     latest_path = f"/api/threads/{thread.id}/state"
@@ -65,10 +69,13 @@ def test_latest_and_history_return_complete_child_records(storage_and_client):
 
     assert latest.status_code == history.status_code == 200
     saved_child = latest.json()["state"]["subtasks"][child.task_id]
-    assert saved_child == child.to_dict()
+    expected_child = child.to_dict()
+    expected_child.pop("compression")  # 内部上下文元数据不改变成功 HTTP schema。
+    assert saved_child == expected_child
+    assert "compression" not in latest.json()["state"]
     assert saved_child["tool_call_id"] == "parent-task-call"
     assert saved_child["messages"][2]["tool_call_id"] == "child-read"
-    assert latest.json()["state"]["messages"] == [state.messages[0].to_dict()]
+    assert latest.json()["state"]["messages"] == [message.to_dict() for message in state.messages]
     assert history.json()[0]["state"]["subtasks"] == {}
     assert history.json()[1]["state"]["subtasks"][child.task_id] == saved_child
     assert client.get(latest_path, params={"user_id": "bob"}).status_code == 404

@@ -98,7 +98,7 @@ def test_plan_survives_parallel_child_checkpoints_and_api_history(monkeypatch, t
             async def chat(self, messages, tools, **kwargs):
                 nonlocal entered
                 self.calls += 1
-                assert [tool.name for tool in tools] == ["read_file", "read_tool_result"]
+                assert [tool.name for tool in tools] == ["read_file", "read_tool_result", "snip"]
                 assert all("<todo_list_system>" not in message.content for message in messages)
                 if self.calls == 1:
                     entered += 1

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   BookOpenTextIcon, ChevronDownIcon, CopyIcon, FolderOpenIcon, GlobeIcon,
-  ListTodoIcon, MessageSquareTextIcon, NotebookPenIcon, SearchIcon, SquareTerminalIcon, WrenchIcon,
+  ListTodoIcon, MessageSquareTextIcon, NotebookPenIcon, ScissorsIcon, SearchIcon, SquareTerminalIcon, WrenchIcon,
 } from "lucide-react";
 import type { ProcessStep, ToolProcessStep } from "./message-groups";
 import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtStep } from "./ai-elements/chain-of-thought";
@@ -34,6 +34,7 @@ const toolPresentation = {
   web_fetch: { label: "读取网页", icon: GlobeIcon },
   write_file: { label: "写入文件", icon: NotebookPenIcon },
   write_todos: { label: "更新任务清单", icon: ListTodoIcon },
+  snip: { label: "清理旧上下文", icon: ScissorsIcon },
   str_replace: { label: "修改文件", icon: NotebookPenIcon },
   ls: { label: "查看目录", icon: FolderOpenIcon },
 };

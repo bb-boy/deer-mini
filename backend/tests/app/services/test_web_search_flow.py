@@ -103,8 +103,10 @@ def test_search_result_returns_to_model_and_is_persisted(monkeypatch, tmp_path):
     assert "https://docs.python.org/3/library/asyncio.html" in messages[-1].content
 
     checkpoints = CheckpointRepository().history(thread.id, "search-user", run.id)
-    assert [checkpoint.step for checkpoint in checkpoints] == [1, 2, 3, 4, 5]
-    assert any(message.role == "tool" for message in checkpoints[2].state.messages)
+    assert [checkpoint.step for checkpoint in checkpoints] == list(range(1, 10))
+    assert checkpoints[-1].state.compression.last_api_at is not None
+    tool_snapshots = [cp for cp in checkpoints if cp.state.messages[-1].id == messages[2].id]
+    assert tool_snapshots and all(cp.state.messages[-1] == messages[2] for cp in tool_snapshots)
     assert checkpoints[-1].state.messages[-1].content == messages[-1].content
     logs = EventRepository().list_for_run(thread.id, run.id, "search-user")
     assert [event.payload["phase"] for event in logs if event.event_type == "model.status"] == [

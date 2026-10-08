@@ -206,7 +206,8 @@ class OpenAICompatibleModel:
         thinking_enabled: bool = False,
         reasoning_effort: str | None = None,
         on_text_delta: TextDeltaHandler | None = None,
-        on_reasoning_delta: TextDeltaHandler | None = None) -> Message:
+        on_reasoning_delta: TextDeltaHandler | None = None,
+        max_output_tokens: int | None = None) -> Message:
 
 
         """
@@ -259,6 +260,7 @@ class OpenAICompatibleModel:
 
             #开启流式返回
             "stream": True,
+            "stream_options": {"include_usage": True},
 
 
             # #sdk没有thinking这个，放到extra_body里，USTC DeepSeek会识别
@@ -308,6 +310,11 @@ class OpenAICompatibleModel:
 
 
         #调用USTC DeepSeek的chat.completions.create接口，返回一个异步生成器
+        if max_output_tokens is not None:
+            if not isinstance(max_output_tokens, int) or isinstance(max_output_tokens, bool) or max_output_tokens <= 0:
+                raise ValueError("max_output_tokens 必须是大于 0 的整数")
+            request["max_tokens"] = max_output_tokens
+        self.last_prompt_tokens = None
         response_stream = await self._client.chat.completions.create(**request)
 
 
@@ -319,6 +326,8 @@ class OpenAICompatibleModel:
 
         #收集delta的tool_calls碎片，int是tool_call的index，_ToolCallPart是tool_call的内容
         tool_call_parts: dict[int, _ToolCallPart] = {}
+
+        prompt_tokens: int | None = None
 
         #返回toolcall完整的
         completed_tool_calls: list[ToolCall] = []
@@ -401,6 +410,10 @@ class OpenAICompatibleModel:
                 #SDK 把服务器返回的 JSON 数据，包装成了一个 Python 类的实例
                 #chunk是一个类对象，不是字典，所以不能直接用chunk["choices"]，而是要用chunk.choices
                 #判断choices是否为空
+                usage = getattr(chunk, "usage", None)
+                raw_prompt_tokens = getattr(usage, "prompt_tokens", None)
+                if type(raw_prompt_tokens) is int and raw_prompt_tokens > 0:
+                    prompt_tokens = raw_prompt_tokens
                 if not chunk.choices:
                     continue
 
@@ -488,6 +501,8 @@ class OpenAICompatibleModel:
         if finish_reason not in {"stop", "tool_calls"}:
             reason = {"length": "response_length", "content_filter": "content_filter"}.get(finish_reason, "invalid_response")
             raise InvalidModelResponseError(reason)
+
+        self.last_prompt_tokens = prompt_tokens
 
         #拼接完整的content
         full_text = "".join(text_parts)

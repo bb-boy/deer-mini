@@ -3,6 +3,7 @@
 from collections.abc import Callable
 
 from app.agents.middleware import AgentMiddleware
+from app.context_compression.policy import CompressionPolicy
 from app.domain.threads import ThreadState
 from app.model.base import ChatModel
 from app.runtime.context import RuntimeContext
@@ -29,11 +30,13 @@ class SubagentMiddleware(AgentMiddleware):
         max_total: int = DEFAULT_MAX_TOTAL_SUBAGENTS,
         timeout_seconds: float = 120.0, max_tool_rounds: int = 8,
         thinking_enabled: bool = False, reasoning_effort: str | None = None,
+        compression_policy: CompressionPolicy | None = None,
     ) -> None:
         self._task_tool = task_tool
         self._registry = tool_registry
         self._model_factory = model_factory
         self._options = {
+            "compression_policy": compression_policy,
             "max_concurrent": max_concurrent, "max_total": max_total,
             "timeout_seconds": timeout_seconds, "max_tool_rounds": max_tool_rounds,
             "thinking_enabled": thinking_enabled, "reasoning_effort": reasoning_effort,

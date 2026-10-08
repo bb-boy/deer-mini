@@ -9,6 +9,7 @@ import logging
 from collections.abc import Callable
 from copy import deepcopy
 
+from app.context_compression.policy import CompressionPolicy
 from app.domain.subagents import SubagentTask
 from app.domain.threads import ThreadState
 from app.domain.tools import ToolResult
@@ -43,6 +44,7 @@ class SubagentDispatcher:
         max_total: int = DEFAULT_MAX_TOTAL_SUBAGENTS,
         timeout_seconds: float = 120.0, max_tool_rounds: int = 8,
         thinking_enabled: bool = False, reasoning_effort: str | None = None,
+        compression_policy: CompressionPolicy | None = None,
     ) -> None:
         for value in (max_concurrent, max_total):
             if not isinstance(value, int) or isinstance(value, bool) or value < 1:
@@ -59,6 +61,7 @@ class SubagentDispatcher:
             model_factory=model_factory, timeout_seconds=timeout_seconds,
             max_tool_rounds=max_tool_rounds, thinking_enabled=thinking_enabled,
             reasoning_effort=reasoning_effort, checkpoint_lock=self._checkpoint_lock,
+            compression_policy=compression_policy,
         )
 
     async def execute(self, candidate: SubagentTask, context: RuntimeContext) -> ToolResult:

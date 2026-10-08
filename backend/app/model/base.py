@@ -31,9 +31,9 @@ class ChatModel(Protocol):
         tools: list[ToolDefinition],
         thinking_enabled: bool = False,
         reasoning_effort: str | None = None,
-
         on_text_delta: TextDeltaHandler | None = None,
         on_reasoning_delta: TextDeltaHandler | None = None,
+        max_output_tokens: int | None = None,
     ) -> Message:
         """
         发送一条消息给聊天模型，并获取模型的回复。
@@ -42,6 +42,7 @@ class ChatModel(Protocol):
         :param tools: 可用的工具定义列表，模型可以调用这些工具。
         :param thinking_enabled: 是否启用模型的思考模式。
         :param reasoning_effort: 可选的推理努力参数，指定模型在生成回复时的推理深度或复杂度。
+        :param max_output_tokens: 可选的模型输出 token 限额；Auto-Compact 使用该限额。
         :param on_text_delta: 可选的回调函数，用于处理模型输出的增量文本。
         :param on_reasoning_delta: 可选的回调函数，把模型真实返回的思考片段实时交给界面。
         :return: 消息

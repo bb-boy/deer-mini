@@ -73,7 +73,7 @@ def test_delegated_file_results_return_to_parent_and_persist(monkeypatch, thread
 
             async def chat(self, messages, tools, on_text_delta=None, **kwargs):
                 self.calls += 1
-                assert [item.name for item in tools] == ["read_file", "read_tool_result"]
+                assert [item.name for item in tools] == ["read_file", "read_tool_result", "snip"]
                 filename = next(message.content for message in messages if message.role == "user")
                 if filename == "0.txt" and one_child_fails:
                     raise RuntimeError("child provider failed")

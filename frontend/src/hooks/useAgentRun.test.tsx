@@ -105,6 +105,37 @@ describe("useAgentRun", () => {
     expect(result.current.modelNotices).toEqual(["子任务：retry B"]);
   });
 
+  it("shows compaction without adding an answer and preserves concurrent child notices", async () => {
+    const { result } = renderHook(() => useAgentRun({ userId: "alice", thread, onSettled: vi.fn() }));
+    await act(async () => { await result.current.start(input); });
+    const options = openRunStreamMock.mock.calls[0][0];
+    act(() => {
+      options.onEvent({ ...delta, event_type: "model.status", payload: {
+        phase: "compacting", message_id: "context-compaction", message: "正在整理上下文",
+      } });
+      options.onEvent({ ...delta, event_type: "subagent.model.status", payload: {
+        phase: "compacting", task_id: "a", message_id: "context-compaction", message: "正在整理上下文",
+      } });
+      options.onEvent({ ...delta, event_type: "subagent.model.status", payload: {
+        phase: "retry", task_id: "b", message: "等待重试",
+      } });
+    });
+    expect(result.current.modelNotices).toEqual(["正在整理上下文", "子任务：正在整理上下文", "子任务：等待重试"]);
+    expect(result.current.liveMessages).toEqual([]);
+    act(() => options.onEvent({ ...delta, event_type: "model.status", payload: {
+      phase: "complete", message_id: "context-compaction",
+    } }));
+    expect(result.current.modelNotices).toEqual(["子任务：正在整理上下文", "子任务：等待重试"]);
+    act(() => options.onEvent({ ...delta, event_type: "subagent.model.status", payload: {
+      phase: "complete", task_id: "a", message_id: "context-compaction",
+    } }));
+    expect(result.current.modelNotices).toEqual(["子任务：等待重试"]);
+    act(() => options.onEvent(delta));
+    expect(result.current.liveMessages[0].content).toBe("收到的回答");
+    act(() => result.current.clearTransient());
+    expect(result.current.modelNotices).toEqual([]);
+  });
+
   it("retains interrupted partial text after terminal refresh without treating it as complete", async () => {
     const { result } = renderHook(() => useAgentRun({ userId: "alice", thread, onSettled: vi.fn() }));
     await act(async () => { await result.current.start(input); });

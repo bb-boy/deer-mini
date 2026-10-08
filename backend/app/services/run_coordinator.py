@@ -13,6 +13,8 @@ from app.agents.lead_agent import LeadAgent
 from app.agents.todo_middleware import TodoMiddleware
 from app.agents.middleware_stack import build_runtime_middlewares
 from app.agents.workspace_context_middleware import WorkspaceContextMiddleware
+from app.context_compression.middleware import ContextCompressionMiddleware
+from app.context_compression.policy import CompressionPolicy
 from app.domain.runs import Run
 from app.domain.threads import ThreadState
 from app.model.factory import ModelFactory
@@ -43,6 +45,7 @@ from app.tools.bash import BashTool
 from app.tools.executor import ToolExecutor
 from app.tools.read_file_rewrite import ReadFileTool
 from app.tools.read_tool_result import ReadToolResultTool
+from app.tools.snip import SnipTool
 from app.tools.registry import ToolRegistry
 from app.tools.task import TaskTool
 from app.tools.web_search import WebSearchTool
@@ -85,9 +88,11 @@ class RunCoordinator:
         run_timeout_seconds: float | None = None,
         bash_runner: CommandRunner | None | object = _AUTO_BASH_RUNNER,
         memory_service: MemoryService | None = None,
+        compression_policy: CompressionPolicy | None = None,
     ) -> None:
         self._stream_bridge = stream_bridge
         self._memory_service = memory_service or MemoryService()
+        self._compression_policy = compression_policy or CompressionPolicy.from_env()
         self._run_service = run_service or RunService()
         self._run_timeout_seconds = (
             _load_run_timeout_seconds()
@@ -135,6 +140,8 @@ class RunCoordinator:
             registry.register(WebFetchTool(tavily_api_key))
         registry.register(TaskTool())
         registry.register(WriteTodosTool())
+        if self._compression_policy.enabled and self._compression_policy.snip_enabled:
+            registry.register(SnipTool())
         return registry
 
     def _owned_file_thread(self, user_id: str, thread_id: str):
@@ -232,11 +239,16 @@ class RunCoordinator:
                 TodoMiddleware(todo_tool),
                 SubagentMiddleware(
                     task_tool, registry, model_factory.create_chat_model,
+                    compression_policy=self._compression_policy,
                     thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort,
                 ),
             ]
             if self._memory_service.enabled:
                 extra_middlewares.append(self._memory_service.middleware(model_factory.create_chat_model))
+            extra_middlewares.append(ContextCompressionMiddleware(
+                model, registry, model_key=model_name,
+                policy=self._compression_policy,
+            ))
             agent = LeadAgent(
                 model=model,
                 tool_registry=registry,

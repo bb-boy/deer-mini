@@ -8,6 +8,7 @@ from app.domain.messages import Message
 from app.domain.subagents import SubagentTask
 from app.domain.todos import TodoItem
 from app.domain.common import new_id, utc_now
+from app.context_compression.state import CompressionState
 
 
 
@@ -41,6 +42,7 @@ class ThreadState:
     todos: list[TodoItem] = field(default_factory=list)
     todos_run_id: str | None = None
     todos_tool_call_id: str | None = None
+    compression: CompressionState = field(default_factory=CompressionState)
 
     def __post_init__(self) -> None:
         self._validate_subtasks()
@@ -90,6 +92,7 @@ class ThreadState:
             "todos": [todo.to_dict() for todo in self.todos],
             "todos_run_id": self.todos_run_id,
             "todos_tool_call_id": self.todos_tool_call_id,
+            "compression": self.compression.model_dump(),
         }
 
     @classmethod #调用这个函数时，请自动把 ThreadState 这个类放进第一个空位。
@@ -113,4 +116,5 @@ class ThreadState:
             todos=[TodoItem.from_dict(todo) for todo in raw_todos],
             todos_run_id=data.get("todos_run_id"),
             todos_tool_call_id=data.get("todos_tool_call_id"),
+            compression=CompressionState.model_validate(data.get("compression", {})),
         )

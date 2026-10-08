@@ -128,8 +128,10 @@ def test_search_then_fetch_returns_body_or_error_to_model(monkeypatch, tmp_path,
     assert messages[3].tool_calls[0].arguments["url"] == PAGE_URL
     assert messages[4].tool_call_id == "call-fetch"
     checkpoints = CheckpointRepository().history(thread.id, "fetch-user", run.id)
-    assert [checkpoint.step for checkpoint in checkpoints] == list(range(1, 8))
-    assert checkpoints[4].state.messages[-1].content == messages[4].content
+    assert [checkpoint.step for checkpoint in checkpoints] == list(range(1, 14))
+    assert checkpoints[-1].state.compression.last_api_at is not None
+    fetch_snapshots = [cp for cp in checkpoints if cp.state.messages[-1].id == messages[4].id]
+    assert fetch_snapshots and all(cp.state.messages[-1] == messages[4] for cp in fetch_snapshots)
     assert checkpoints[-1].state.messages[-1].content == messages[-1].content
     logs = EventRepository().list_for_run(thread.id, run.id, "fetch-user")
     tool_ends = [event for event in logs if event.event_type == "tool.end"]

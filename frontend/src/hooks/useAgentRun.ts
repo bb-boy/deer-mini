@@ -71,7 +71,8 @@ export function useAgentRun({ userId, thread, onSettled, onSnapshot }: UseAgentR
       const key = child ? `child:${String(event.payload.task_id)}` : `model:${String(event.payload.message_id)}`;
       setModelNoticeMap((current) => {
         const next = { ...current };
-        if (event.payload.phase === "retry" && typeof event.payload.message === "string") {
+        if ((event.payload.phase === "retry" || event.payload.phase === "compacting")
+          && typeof event.payload.message === "string") {
           next[key] = `${child ? "子任务：" : ""}${event.payload.message}`;
         } else {
           delete next[key];

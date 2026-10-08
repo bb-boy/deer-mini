@@ -12,6 +12,7 @@ from typing import Any, Literal, get_args
 
 from app.domain.common import new_id
 from app.domain.messages import Message
+from app.context_compression.state import CompressionState
 
 
 # 它与主 Run 的状态分别记录。
@@ -45,6 +46,7 @@ class SubagentTask:
     messages: list[Message] = field(default_factory=list)
     result: str | None = None
     error: str | None = None
+    compression: CompressionState = field(default_factory=CompressionState)
 
     def __post_init__(self) -> None:
         """对象建立后校验字段；只检查数据，不执行状态迁移。"""
@@ -88,6 +90,7 @@ class SubagentTask:
             "messages": [message.to_dict() for message in self.messages],
             "result": self.result,
             "error": self.error,
+            "compression": self.compression.model_dump(),
         }
 
     @classmethod
@@ -111,4 +114,5 @@ class SubagentTask:
             messages=[Message.from_dict(message) for message in raw_messages],
             result=data.get("result"),
             error=data.get("error"),
+            compression=CompressionState.model_validate(data.get("compression", {})),
         )

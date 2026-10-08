@@ -146,14 +146,15 @@ def test_real_tool_loop_preserves_parent_history_and_filters_tools(tmp_path):
         assert result.content == task.result == "真实文件里的数据 728"
         assert not result.is_error and result.tool_call_id == task.tool_call_id
         assert task.status == "completed" and model.closed == 1
-        assert model.tool_names == [["read_file"], ["read_file"]]
+        assert model.tool_names == [["read_file", "snip"], ["read_file", "snip"]]
         assert run.registry.get("task") is not None
         assert [message.role for message in task.messages] == ["system", "user", "assistant", "tool", "assistant"]
         assert all("仅存在于父对话" not in message.content for call in model.calls for message in call)
         assert [message.content for message in run.state.messages] == ["仅存在于父对话的背景"]
         assert all(checkpoint.state.subtasks[old.task_id].result == "旧结论" for checkpoint in run.checkpoints)
         assert all(checkpoint.state.messages[0].id == run.state.messages[0].id for checkpoint in run.checkpoints)
-        assert [checkpoint.step for checkpoint in run.checkpoints] == [1, 2, 3, 4, 5]
+        assert [checkpoint.step for checkpoint in run.checkpoints] == list(range(1, 10))
+        assert run.checkpoints[-1].state.subtasks[task.task_id].compression.last_api_at is not None
         for event in run.events:
             assert event.event_type.startswith("subagent.")
             assert event.payload["task_id"] == task.task_id

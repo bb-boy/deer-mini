@@ -15,6 +15,8 @@ from dataclasses import replace
 from app.agents.lead_agent import LeadAgent
 from app.agents.middleware_stack import build_runtime_middlewares
 from app.agents.workspace_context_middleware import WorkspaceContextMiddleware
+from app.context_compression.middleware import ContextCompressionMiddleware
+from app.context_compression.policy import CompressionPolicy
 from app.domain.checkpoints import Checkpoint
 from app.domain.events import RunEvent, RunEventType
 from app.domain.messages import Message
@@ -29,6 +31,7 @@ from app.runtime.errors import StatePersistenceError
 from app.subagents.prompts import build_subagent_prompt
 from app.tools.executor import ToolExecutor
 from app.tools.registry import ToolRegistry
+from app.tools.snip import SnipTool
 
 
 logger = logging.getLogger(__name__)
@@ -68,6 +71,7 @@ class SubagentExecutor:
         thinking_enabled: bool = False, reasoning_effort: str | None = None,
         model_close_timeout: float = 5.0,
         checkpoint_lock: asyncio.Lock | None = None,
+        compression_policy: CompressionPolicy | None = None,
     ) -> None:
         if (parent_state.user_id, parent_state.thread_id) != (context.user_id, context.thread_id):
             raise ValueError("父状态与 RuntimeContext 不属于同一用户和 Thread")
@@ -78,6 +82,7 @@ class SubagentExecutor:
             raise ValueError("子任务超时和模型关闭时间必须是大于 0 的有限数字")
         if not isinstance(max_tool_rounds, int) or isinstance(max_tool_rounds, bool) or max_tool_rounds < 1:
             raise ValueError("max_tool_rounds 必须是大于 0 的整数")
+        self._compression_policy = compression_policy or CompressionPolicy.from_env()
         self._parent_state = parent_state
         self._context = context
         self._registry = tool_registry
@@ -169,10 +174,12 @@ class SubagentExecutor:
         """创建新工具表和新模型，交给现有 LeadAgent；不复制父对话消息。"""
         registry = ToolRegistry()
         for definition in self._registry.definitions():
-            if definition.name not in DISALLOWED_TOOLS:
+            if definition.name not in DISALLOWED_TOOLS and definition.name != "snip":
                 tool = self._registry.get(definition.name)
                 assert tool is not None
                 registry.register(tool)
+        if self._compression_policy.enabled and self._compression_policy.snip_enabled:
+            registry.register(SnipTool())
         prompt = build_subagent_prompt([item.name for item in registry.definitions()])
         model = self._model_factory()
         try:
@@ -180,7 +187,14 @@ class SubagentExecutor:
                 model, registry, ToolExecutor(registry), system_prompt=prompt,
                 thinking_enabled=self._thinking_enabled, reasoning_effort=self._reasoning_effort,
                 max_tool_rounds=self._max_tool_rounds,
-                middlewares=build_runtime_middlewares([WorkspaceContextMiddleware(registry)]),
+                middlewares=build_runtime_middlewares([
+                    WorkspaceContextMiddleware(registry),
+                    ContextCompressionMiddleware(
+                        model, registry,
+                        model_key=getattr(model, "_model_name", "subagent"),
+                        policy=self._compression_policy,
+                    ),
+                ]),
                 model_close_timeout=self._model_close_timeout,
             )
         except BaseException:
@@ -230,6 +244,7 @@ class SubagentExecutor:
                     raise ValueError("子任务必须先进入 running")
                 candidate = replace(
                     task, messages=deepcopy(child.messages), status=status, result=result, error=error,
+                    compression=deepcopy(child.compression),
                 )
                 snapshot = deepcopy(self._parent_state)
                 snapshot.subtasks[task.task_id] = candidate
@@ -237,6 +252,7 @@ class SubagentExecutor:
                 # 只更新这一张工作单；父消息和其他子任务不会被旧快照覆盖。
                 task.messages = deepcopy(candidate.messages)
                 task.status, task.result, task.error = status, result, error
+                task.compression = deepcopy(candidate.compression)
                 return saved
 
         try:

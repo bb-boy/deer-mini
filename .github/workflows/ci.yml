@@ -45,6 +45,28 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run isolated regression tests (no real model or Docker)
         run: python -m pytest tests/app --ignore=tests/app/model/test_factory.py -q
+      - name: Smoke-test FastAPI startup (no model calls)
+        run: |
+          mkdir -p "$DEER_MINI_DATA_ROOT"
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8005 > "$RUNNER_TEMP/deer-mini-api.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for n in {1..40}; do
+            if curl -fsS http://127.0.0.1:8005/openapi.json -o "$RUNNER_TEMP/openapi.json"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "FastAPI failed to start"
+            cat "$RUNNER_TEMP/deer-mini-api.log"
+            exit 1
+          fi
+          python -c 'import json,os; p=json.load(open(os.environ["RUNNER_TEMP"]+"/openapi.json")); assert p["info"]["title"] == "deer_mini API"'
+          echo "FastAPI startup: OK"
+
 
   frontend:
     name: Frontend / typecheck, tests, build
@@ -72,3 +94,23 @@ jobs:
         run: pnpm test
       - name: Build frontend
         run: pnpm build
+      - name: Smoke-test Vite startup (no backend or model calls)
+        run: |
+          pnpm dev -- --host 127.0.0.1 --port 5175 --strictPort > "$RUNNER_TEMP/deer-mini-web.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for n in {1..40}; do
+            if curl -fsS http://127.0.0.1:5175/ -o "$RUNNER_TEMP/index.html"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Vite failed to start"
+            cat "$RUNNER_TEMP/deer-mini-web.log"
+            exit 1
+          fi
+          grep -q 'id="root"' "$RUNNER_TEMP/index.html"
+          echo "Vite startup: OK"

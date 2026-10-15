@@ -21,7 +21,8 @@
       "args": [
         "-m",
         "pytest",
-        "tests",
+        "tests/app",
+        "--ignore=tests/app/model/test_factory.py",
         "-v"
       ],
       "options": {

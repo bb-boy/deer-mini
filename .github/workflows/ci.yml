@@ -20,8 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      DEER_MINI_DATABASE_PATH: ${{ runner.temp }}/deer-mini-ci.db
-      DEER_MINI_DATA_ROOT: ${{ runner.temp }}/deer-mini-ci-users
       DEER_MINI_MEMORY_ENABLED: "false"
       DEER_MINI_BASH_ENABLED: "false"
       RUN_DOCKER_SANDBOX_TEST: "0"
@@ -39,6 +37,10 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/requirements.txt
+      - name: Configure temporary test storage
+        run: |
+          echo "DEER_MINI_DATABASE_PATH=$RUNNER_TEMP/deer-mini-ci.db" >> "$GITHUB_ENV"
+          echo "DEER_MINI_DATA_ROOT=$RUNNER_TEMP/deer-mini-ci-users" >> "$GITHUB_ENV"
       - name: Install backend dependencies
         run: python -m pip install -r requirements.txt
       - name: Run isolated regression tests (no real model or Docker)

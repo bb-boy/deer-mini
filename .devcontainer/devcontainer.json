@@ -4,18 +4,24 @@
   "features": {
     "ghcr.io/devcontainers/features/node:1": {
       "version": "22"
+    },
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
     }
   },
   "postCreateCommand": "bash .devcontainer/setup.sh",
-  "forwardPorts": [8005, 5175],
+  "forwardPorts": [
+    8005,
+    5175
+  ],
   "portsAttributes": {
-    "8005": {
-      "label": "deer-mini FastAPI",
-      "onAutoForward": "silent"
-    },
     "5175": {
       "label": "deer-mini React",
       "onAutoForward": "openPreview"
+    },
+    "8005": {
+      "label": "deer-mini FastAPI",
+      "onAutoForward": "silent"
     }
   },
   "customizations": {
